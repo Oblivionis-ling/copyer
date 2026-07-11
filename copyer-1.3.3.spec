@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['test.py'],
+    ['copyer.py'],
     pathex=[],
     binaries=[],
     datas=[('app_icon.ico', '.')],

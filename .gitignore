@@ -10,13 +10,6 @@ dist/
 *.7z
 *.iso
 
-# Old build specs kept locally, but not part of the latest source snapshot
-copyer-1.0.0.spec
-copyer-1.1.0.spec
-copyer-1.2.0.spec
-copyer-1.3.0.spec
-copyer-1.3.2.spec
-
 # Python cache and local environments
 __pycache__/
 *.py[cod]
