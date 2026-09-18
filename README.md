@@ -2,7 +2,7 @@
 
 `copyer` 是一款面向 Windows 的读卡器照片与视频导入工具。它会扫描存储卡或指定目录中的媒体文件，按拍摄日期分组，并复制到目标目录。界面提供格式筛选、分组后缀、导入进度、执行日志和导入后源文件清理功能。
 
-当前源码版本：`1.3.3`
+当前源码版本：`1.4.0`
 
 > 仓库只保存源码、测试和构建配置，不提交 `build/`、`dist/`、可执行文件或发布压缩包。
 
@@ -86,7 +86,7 @@ $env:QT_QPA_PLATFORM = "offscreen"
 - JPEG EXIF 日期读取与修改时间回退
 - 多层目录扫描及格式筛选
 - 文件复制、进度信号和复制结果
-- `1.3.3` 版本的窗口尺寸、文案、默认选项、表头、样式及颜色基线
+- `1.4.0` 版本的窗口尺寸、文案、默认选项、表头、样式及颜色基线
 
 ## 构建 Windows 发布包
 
@@ -96,12 +96,12 @@ $env:QT_QPA_PLATFORM = "offscreen"
 .\build_copyer.ps1
 ```
 
-构建脚本优先使用项目内 `.conda_env\python.exe`；若该环境不存在，则使用 `PATH` 中的 Python。PyInstaller 会读取 `copyer-1.3.3.spec`，生成单目录发布包：
+构建脚本优先使用项目内 `.conda_env\python.exe`；若该环境不存在，则使用 `PATH` 中的 Python。PyInstaller 会读取 `copyer-1.4.0.spec`，生成单目录发布包：
 
 ```text
 dist/
-└── copyer-1.3.3/
-    ├── copyer-1.3.3.exe
+└── copyer-1.4.0/
+    ├── copyer-1.4.0.exe
     └── _internal/
 ```
 
@@ -118,7 +118,7 @@ copyer/
 │   └── generate_icon.py   # 应用图标生成工具
 ├── app_icon.ico           # Windows 应用图标
 ├── app_icon.png           # PNG 图标源
-├── copyer-1.3.3.spec      # PyInstaller 构建配置
+├── copyer-1.4.0.spec      # PyInstaller 构建配置
 ├── build_copyer.ps1       # Windows 构建脚本
 └── requirements.txt       # 运行与构建依赖
 ```

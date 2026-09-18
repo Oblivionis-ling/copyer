@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 import time
 import unittest
@@ -119,7 +120,12 @@ class InterfaceCompatibilityTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls._settings_directory.cleanup()
 
-    def test_window_matches_release_1_3_3_interface_baseline(self) -> None:
+    def setUp(self) -> None:
+        settings = QtCore.QSettings(copyer.APP_ORGANIZATION, copyer.APP_NAME)
+        settings.clear()
+        settings.sync()
+
+    def test_window_matches_release_1_4_0_interface_baseline(self) -> None:
         window = copyer.MediaImporterWindow()
         self.addCleanup(window.close)
 
@@ -162,14 +168,62 @@ class InterfaceCompatibilityTests(unittest.TestCase):
         )
         self.assertEqual(window.progress_label.text(), "未开始")
         self.assertEqual(window.log_output.placeholderText(), "执行日志...")
-        self.assertEqual(self.application.style().objectName(), "fusion")
+        self.assertTrue(self.application.styleSheet())
+        self.assertTrue(
+            window.windowFlags() & QtCore.Qt.WindowType.FramelessWindowHint
+        )
+        self.assertIsInstance(window.title_bar, copyer.FramelessTitleBar)
+        self.assertIn(self.application.font().family(), copyer.UI_FONT_CANDIDATES)
 
         palette = self.application.palette()
-        self.assertEqual(palette.color(QtGui.QPalette.Window).name(), "#1e2126")
-        self.assertEqual(palette.color(QtGui.QPalette.WindowText).name(), "#f0f0f0")
-        self.assertEqual(palette.color(QtGui.QPalette.Base).name(), "#181a1f")
-        self.assertEqual(palette.color(QtGui.QPalette.Button).name(), "#34383f")
-        self.assertEqual(palette.color(QtGui.QPalette.Highlight).name(), "#4084d6")
+        self.assertEqual(palette.color(QtGui.QPalette.Window).name(), "#e2e2de")
+        self.assertEqual(palette.color(QtGui.QPalette.WindowText).name(), "#222424")
+        self.assertEqual(palette.color(QtGui.QPalette.Base).name(), "#f2f2ee")
+        self.assertEqual(palette.color(QtGui.QPalette.Button).name(), "#e8e8e4")
+        self.assertEqual(palette.color(QtGui.QPalette.Highlight).name(), "#243746")
+        self.assertEqual(window.import_button.objectName(), "primaryAction")
+        self.assertEqual(window.delete_sources_button.objectName(), "dangerAction")
+
+    def test_all_custom_windows_are_frameless(self) -> None:
+        window = copyer.MediaImporterWindow()
+        self.addCleanup(window.close)
+        message_dialog = copyer.FramelessMessageDialog(
+            window,
+            "提示",
+            "源路径不存在，请先选择读卡器或文件夹。",
+            kind="warning",
+        )
+        self.addCleanup(message_dialog.close)
+        directory_dialog = copyer.FramelessDirectoryDialog(
+            window,
+            "选择目标文件夹",
+        )
+        self.addCleanup(directory_dialog.close)
+
+        for candidate in (window, message_dialog, directory_dialog):
+            self.assertTrue(
+                candidate.windowFlags() & QtCore.Qt.WindowType.FramelessWindowHint
+            )
+            self.assertIsInstance(candidate.title_bar, copyer.FramelessTitleBar)
+
+    def test_selected_font_covers_all_chinese_ui_characters(self) -> None:
+        window = copyer.MediaImporterWindow()
+        self.addCleanup(window.close)
+        source_text = Path(copyer.__file__).read_text(encoding="utf-8")
+        chinese_text = "".join(sorted(set(re.findall(r"[\u4e00-\u9fff]", source_text))))
+        raw_font = QtGui.QRawFont.fromFont(self.application.font())
+        missing_characters = sorted(
+            {
+                character
+                for character, glyph_index in zip(
+                    chinese_text,
+                    raw_font.glyphIndexesForString(chinese_text),
+                    strict=True,
+                )
+                if glyph_index == 0
+            }
+        )
+        self.assertEqual(missing_characters, [])
 
     def test_group_suffix_updates_preview_and_import_plan(self) -> None:
         window = copyer.MediaImporterWindow()
