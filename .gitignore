@@ -27,3 +27,10 @@ env/
 *.log
 .DS_Store
 Thumbs.db
+_work/
+
+# Local design iterations and desktop QA evidence
+/design-qa.md
+/docs/v1.5.0/*
+!/docs/v1.5.0/使用说明.txt
+!/docs/v1.5.0/RELEASE.md

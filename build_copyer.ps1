@@ -8,7 +8,7 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location -Path $projectRoot
 
-$specPath = Join-Path $projectRoot "copyer-1.4.0.spec"
+$specPath = Join-Path $projectRoot "copyer.spec"
 $icoPath = Join-Path $projectRoot "app_icon.ico"
 $projectPython = Join-Path $projectRoot ".conda_env\python.exe"
 $projectLibraryBin = Join-Path $projectRoot ".conda_env\Library\bin"
@@ -19,7 +19,7 @@ if (!(Test-Path $icoPath)) {
 }
 
 if (!(Test-Path $specPath)) {
-    Write-Error "copyer-1.4.0.spec not found in project root."
+    Write-Error "copyer.spec not found in project root."
     exit 1
 }
 
@@ -32,12 +32,8 @@ if (Test-Path $projectPython) {
         $env:PYTHONNOUSERSITE = "1"
     }
 } else {
-    $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
-    if (!$pythonCommand) {
-        Write-Error "Python not found. Create .conda_env or add Python to PATH."
-        exit 1
-    }
-    $pythonExecutable = $pythonCommand.Source
+    Write-Error "Project Python not found. Create .conda_env and install requirements.txt first."
+    exit 1
 }
 
 $pyInstallerArguments = @("--noconfirm", "--clean")
@@ -50,3 +46,16 @@ if ($WorkPath) {
 $pyInstallerArguments += $specPath
 
 & $pythonExecutable -m PyInstaller @pyInstallerArguments
+$buildExitCode = $LASTEXITCODE
+if ($buildExitCode -ne 0) { exit $buildExitCode }
+
+$releaseVersion = & $pythonExecutable -c "from copyer_version import APP_VERSION; print(APP_VERSION)"
+$releaseDist = if ($DistPath) { $DistPath } else { Join-Path $projectRoot "dist" }
+$releaseDirectory = Join-Path $releaseDist "copyer-$releaseVersion"
+$instructionsPath = Join-Path $projectRoot "docs\v$releaseVersion\使用说明.txt"
+if (Test-Path -LiteralPath $instructionsPath) {
+    Copy-Item -LiteralPath $instructionsPath -Destination $releaseDirectory
+}
+& $pythonExecutable (Join-Path $projectRoot "tools\collect_licenses.py") $releaseDirectory
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+exit 0

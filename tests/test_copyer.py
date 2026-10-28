@@ -1,272 +1,294 @@
 from __future__ import annotations
 
+import itertools
 import os
-import re
+import shutil
 import tempfile
-import time
 import unittest
 from datetime import datetime
 from pathlib import Path
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from threading import Event
+from unittest.mock import patch
 
 from PIL import Image
-from PySide6 import QtCore, QtGui, QtWidgets
 
-import copyer
-
-
-class FileOrganizationTests(unittest.TestCase):
-    def test_build_destination_folder_name(self) -> None:
-        self.assertEqual(
-            copyer.build_destination_folder_name("2026-07-12", ""), "2026-07-12"
-        )
-        self.assertEqual(
-            copyer.build_destination_folder_name("2026-07-12", "  海边  "),
-            "2026-07-12-海边",
-        )
-
-    def test_ensure_unique_path_uses_incrementing_suffix(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            destination = Path(temporary_directory)
-            (destination / "photo.jpg").touch()
-            (destination / "photo_1.jpg").touch()
-
-            unique_path = copyer.ensure_unique_path(destination, "photo.jpg")
-
-            self.assertEqual(unique_path, destination / "photo_2.jpg")
-
-    def test_get_file_date_prefers_jpeg_exif(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            image_path = Path(temporary_directory) / "photo.jpg"
-            exif = Image.Exif()
-            exif[36867] = "2024:05:06 07:08:09"
-            Image.new("RGB", (2, 2), "white").save(image_path, exif=exif)
-
-            self.assertEqual(copyer.get_file_date(image_path).isoformat(), "2024-05-06")
-
-    def test_scan_media_files_filters_and_groups_recursively(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            source = Path(temporary_directory)
-            nested = source / "nested"
-            nested.mkdir()
-            first_file = source / "first.cr3"
-            second_file = nested / "second.MP4"
-            ignored_file = source / "notes.txt"
-            first_file.write_bytes(b"raw")
-            second_file.write_bytes(b"video")
-            ignored_file.write_text("ignore", encoding="utf-8")
-            os.utime(first_file, (datetime(2024, 1, 2).timestamp(),) * 2)
-            os.utime(second_file, (datetime(2024, 1, 3).timestamp(),) * 2)
-
-            groups = copyer.scan_media_files(
-                source,
-                copyer.RAW_EXTENSIONS | copyer.VIDEO_EXTENSIONS,
-            )
-
-            self.assertEqual(list(groups), ["2024-01-02", "2024-01-03"])
-            self.assertEqual(groups["2024-01-02"], [first_file])
-            self.assertEqual(groups["2024-01-03"], [second_file])
+import copyer_core as core
 
 
-class CopyWorkerTests(unittest.TestCase):
-    def test_copy_worker_copies_metadata_and_avoids_overwrite(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            source_file = root / "photo.jpg"
-            source_file.write_bytes(b"new photo")
-            target = root / "target"
-            destination = target / "2026-07-12"
-            destination.mkdir(parents=True)
-            (destination / "photo.jpg").write_bytes(b"existing photo")
-            progress_events: list[tuple[int, int, str]] = []
-            copied_results: list[list[Path]] = []
-            errors: list[str] = []
-            worker = copyer.CopyWorker([("2026-07-12", [source_file])], target)
-            worker.progress_updated.connect(
-                lambda completed, total, path: progress_events.append(
-                    (completed, total, path)
-                )
-            )
-            worker.succeeded.connect(copied_results.append)
-            worker.failed.connect(errors.append)
+class CoreTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.source = self.root / 'source'
+        self.target = self.root / 'target'
+        self.source.mkdir()
 
-            worker.run()
+    def media(self, name='photo.cr3', content=b'camera data', day='2026-10-27'):
+        path = self.source / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        stamp = datetime.fromisoformat(day).timestamp()
+        os.utime(path, (stamp, stamp))
+        return path
 
-            self.assertEqual(errors, [])
-            self.assertEqual(copied_results, [[source_file]])
-            self.assertEqual(progress_events, [(1, 1, str(source_file))])
-            self.assertEqual(
-                (destination / "photo.jpg").read_bytes(), b"existing photo"
-            )
-            self.assertEqual((destination / "photo_1.jpg").read_bytes(), b"new photo")
+    def job(self, **options):
+        scanned = core.scan(str(self.source), core.RAW_EXTENSIONS | core.JPEG_EXTENSIONS | core.VIDEO_EXTENSIONS)
+        return core.build_job(scanned, str(self.target), {f.path for f in scanned.files}, {}, **options)
+
+    def test_folder_names_reject_traversal_and_invalid_dates(self):
+        self.assertEqual(core.build_destination_folder_name('2026-10-27', ' 海边 '), '2026-10-27-海边')
+        self.assertEqual(core.build_destination_folder_name('2026-10-27', ''), '2026-10-27')
+        for suffix in ('../escape', r'..\escape', 'bad:name', 'x.', 'x\x00'):
+            with self.subTest(suffix=suffix), self.assertRaises(ValueError):
+                core.build_destination_folder_name('2026-10-27', suffix)
+        with self.assertRaises(ValueError):
+            core.build_destination_folder_name('2026-02-31', '')
+        for name in ('CON', 'NUL.txt', 'LPT1', '..'):
+            with self.assertRaises(ValueError):
+                core.validate_component(name)
+
+    def test_empty_paths_never_resolve_to_working_directory(self):
+        with self.assertRaises(ValueError):
+            core.scan('', core.RAW_EXTENSIONS)
+        self.media()
+        job = self.job()
+        scanned = core.scan(str(self.source), core.RAW_EXTENSIONS)
+        with self.assertRaises(ValueError):
+            core.build_job(scanned, '  ', {f.path for f in scanned.files}, {})
+        self.assertNotEqual(job.target, Path.cwd())
+
+    def test_source_and_descendant_targets_rejected(self):
+        self.media()
+        scanned = core.scan(str(self.source), core.RAW_EXTENSIONS)
+        for target in (self.source, self.source / 'nested'):
+            with self.assertRaises(ValueError):
+                core.build_job(scanned, str(target), {f.path for f in scanned.files}, {})
+
+    def test_recursive_scan_filters_and_orders_newest_first(self):
+        a = self.media('first.CR3', day='2026-10-26')
+        b = self.media('DCIM/second.MP4')
+        self.media('ignored.txt')
+        result = core.scan(str(self.source), core.RAW_EXTENSIONS | core.VIDEO_EXTENSIONS)
+        self.assertEqual(list(result.groups), ['2026-10-27', '2026-10-26'])
+        self.assertEqual({f.path for f in result.files}, {a, b})
+        self.assertEqual(result.issues, [])
+
+    def test_real_nested_exif_and_invalid_primary_fallback(self):
+        path = self.source / 'photo.jpg'
+        exif = Image.Exif()
+        exif[34665] = {36867: 'invalid', 36868: '2024:05:06 07:08:09'}
+        exif[306] = '2023:01:01 00:00:00'
+        Image.new('RGB', (4, 4), 'white').save(path, exif=exif)
+        self.assertEqual(core.get_file_date(path).isoformat(), '2024-05-06')
+        self.assertEqual(core.MediaFile.inspect(path).date_source, 'EXIF 拍摄时间')
+
+    def test_corrupt_jpeg_falls_back_to_mtime(self):
+        path = self.media('broken.jpg', b'not a jpeg')
+        self.assertEqual(core.get_file_date(path).isoformat(), '2026-10-27')
+
+    def test_scan_error_is_reported_and_other_files_survive(self):
+        bad, good = self.media('bad.cr3'), self.media('good.cr3')
+        original = core.MediaFile.inspect
+        def inspect(path):
+            if path == bad:
+                raise PermissionError('denied')
+            return original(path)
+        with patch.object(core.MediaFile, 'inspect', side_effect=inspect):
+            result = core.scan(str(self.source), core.RAW_EXTENSIONS)
+        self.assertEqual([f.path for f in result.files], [good])
+        self.assertEqual(result.issues[0].path, bad)
+
+    def test_cancelled_scan_cannot_build_import_plan(self):
+        self.media()
+        cancel = Event()
+        cancel.set()
+        result = core.scan(str(self.source), core.RAW_EXTENSIONS, cancel)
+        self.assertTrue(result.cancelled)
+        with self.assertRaises(ValueError):
+            core.build_job(result, str(self.target), set(), {})
+
+    def test_copy_checks_content_and_preserves_mtime(self):
+        source = self.media(content=b'original photo' * 150000)
+        events = []
+        result = core.run_import(self.job(), progress=events.append)
+        entry = result.files[0]
+        self.assertEqual(entry.status, 'copied')
+        self.assertEqual(entry.destination.read_bytes(), source.read_bytes())
+        self.assertEqual(entry.destination.stat().st_mtime_ns, source.stat().st_mtime_ns)
+        self.assertEqual(events[-1].done, len(source.read_bytes()) * 2)
+        self.assertEqual(events[-1].total, events[-1].done)
+        self.assertEqual({p.phase for p in events}, {'copy', 'verify', 'verified'})
+        self.assertEqual(list(self.target.rglob('*.part')), [])
+
+    def test_same_content_skips_and_different_content_gets_number(self):
+        self.media()
+        job = self.job()
+        first = core.run_import(job).files[0]
+        second = core.run_import(job).files[0]
+        self.assertEqual(second.status, 'skipped')
+        self.assertEqual(first.destination, second.destination)
+        first.destination.write_bytes(b'other data')
+        third = core.run_import(job).files[0]
+        self.assertEqual(third.status, 'copied')
+        self.assertEqual(third.destination.name, 'photo_1.cr3')
+        self.assertEqual(first.destination.read_bytes(), b'other data')
+        self.assertEqual(core.run_import(job).files[0].status, 'skipped')
+
+    def test_duplicate_detection_can_be_disabled(self):
+        self.media()
+        job = self.job(skip_identical=False)
+        core.run_import(job)
+        self.assertEqual(core.run_import(job).files[0].destination.name, 'photo_1.cr3')
+
+    def test_scan_snapshot_rejects_changed_source(self):
+        source = self.media()
+        job = self.job()
+        source.write_bytes(b'changed after scan')
+        result = core.run_import(job)
+        self.assertEqual(result.files[0].status, 'failed')
+        self.assertFalse(any(self.target.rglob('*.cr3')))
+
+    def test_source_changed_during_copy_is_not_published(self):
+        source = self.media()
+        job = self.job()
+        def progress(value):
+            if value.phase == 'copy':
+                source.write_bytes(b'changed during copy')
+        result = core.run_import(job, progress=progress)
+        self.assertEqual(result.files[0].status, 'failed')
+        self.assertFalse(any(self.target.rglob('*.cr3')))
+        self.assertFalse(any(self.target.rglob('*.part')))
+
+    def test_destination_readback_corruption_rejected(self):
+        self.media()
+        job = self.job()
+        def corrupt(value):
+            if value.phase == 'verify':
+                next(self.target.rglob('*.part')).write_bytes(b'corrupt')
+        result = core.run_import(job, progress=corrupt)
+        self.assertEqual(result.files[0].status, 'failed')
+        self.assertIn('校验失败', result.files[0].error)
+        self.assertFalse(any(self.target.rglob('*.cr3')))
+        self.assertFalse(any(self.target.rglob('*.part')))
+
+    def test_one_failed_file_does_not_abort_later_files(self):
+        self.media('a.cr3')
+        self.media('b.cr3')
+        job = self.job()
+        publish = core._publish_without_overwrite
+        def fail_first(temporary, destination):
+            if destination.name == 'a.cr3':
+                raise PermissionError('simulated permission error')
+            publish(temporary, destination)
+        with patch.object(core, '_publish_without_overwrite', side_effect=fail_first):
+            result = core.run_import(job)
+        self.assertEqual([f.status for f in result.files], ['failed', 'copied'])
+        self.assertFalse(any(self.target.rglob('*.part')))
+        retry = core.ImportJob(job.source, job.source_identity, job.target,
+                               tuple(f.item for f in result.files if f.status == 'failed'))
+        self.assertEqual(core.run_import(retry).files[0].status, 'copied')
+        self.assertEqual(len(list(self.target.rglob('*.cr3'))), 2)
+
+    def test_chunk_cancellation_keeps_successes_and_removes_partial(self):
+        self.media('a.cr3', b'first')
+        self.media('b.cr3', b'x' * (core.CHUNK_SIZE * 3))
+        self.media('c.cr3', b'third')
+        cancel = Event()
+        def progress(value):
+            if Path(value.path).name == 'b.cr3' and value.phase == 'copy' and value.done > 10:
+                cancel.set()
+        clock = itertools.count(1, .1)
+        with patch.object(core.time, 'monotonic', side_effect=lambda: next(clock)):
+            result = core.run_import(self.job(), cancel, progress)
+        self.assertTrue(result.cancelled)
+        self.assertEqual([f.status for f in result.files], ['copied', 'pending', 'pending'])
+        self.assertEqual([p.name for p in self.target.rglob('*.cr3')], ['a.cr3'])
+        self.assertFalse(any(self.target.rglob('*.part')))
+        self.assertTrue(all(f.item.media.path.exists() for f in result.files))
+
+    def test_cancel_during_verification_never_publishes(self):
+        self.media()
+        cancel = Event()
+        def progress(value):
+            if value.phase == 'verify':
+                cancel.set()
+        result = core.run_import(self.job(), cancel, progress)
+        self.assertTrue(result.cancelled)
+        self.assertEqual(result.files[0].status, 'pending')
+        self.assertFalse(any(self.target.rglob('*.cr3')))
+        self.assertFalse(any(self.target.rglob('*.part')))
+
+    def test_publish_race_never_overwrites_existing_file(self):
+        self.media()
+        publish = core._publish_without_overwrite
+        raced = False
+        def race(temporary, destination):
+            nonlocal raced
+            if not raced:
+                raced = True
+                destination.write_bytes(b'created concurrently')
+            publish(temporary, destination)
+        with patch.object(core, '_publish_without_overwrite', side_effect=race):
+            result = core.run_import(self.job())
+        self.assertEqual(result.files[0].destination.name, 'photo_1.cr3')
+        self.assertEqual((result.files[0].destination.parent / 'photo.cr3').read_bytes(), b'created concurrently')
+
+    def test_low_space_is_reported_before_copy(self):
+        self.media()
+        with patch.object(core.shutil, 'disk_usage', return_value=shutil._ntuple_diskusage(100, 100, 0)):
+            result = core.run_import(self.job())
+        self.assertIn('空间不足', result.files[0].error)
+        self.assertFalse(any(self.target.rglob('*.cr3')))
+
+    def test_existing_identical_file_does_not_require_copy_capacity(self):
+        self.media()
+        job = self.job()
+        core.run_import(job)
+        with patch.object(core.shutil, 'disk_usage', return_value=shutil._ntuple_diskusage(100, 100, 0)):
+            self.assertEqual(core.run_import(job).files[0].status, 'skipped')
+
+    def make_link(self, path, target, is_directory=False):
+        try:
+            path.symlink_to(target, target_is_directory=is_directory)
+        except OSError as exc:
+            self.skipTest(f'Windows symlink permission unavailable: {exc}')
+
+    def test_broken_symlink_counts_as_occupied_filename(self):
+        self.media()
+        job = self.job()
+        directory = self.target / job.items[0].folder
+        directory.mkdir(parents=True)
+        self.make_link(directory / 'photo.cr3', self.root / 'missing')
+        self.assertEqual(core.ensure_unique_path(directory, 'photo.cr3').name, 'photo_1.cr3')
+        result = core.run_import(job)
+        self.assertEqual(result.files[0].destination.name, 'photo_1.cr3')
+
+    def test_destination_link_cannot_escape_selected_target(self):
+        self.media()
+        job = self.job()
+        self.target.mkdir()
+        outside = self.root / 'outside'
+        outside.mkdir()
+        self.make_link(self.target / job.items[0].folder, outside, True)
+        result = core.run_import(job)
+        self.assertEqual(result.files[0].status, 'failed')
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_scan_does_not_follow_links(self):
+        real = self.media('real.cr3')
+        self.make_link(self.source / 'link.cr3', real)
+        result = core.scan(str(self.source), core.RAW_EXTENSIONS)
+        self.assertEqual(len(result.files), 1)
+        self.assertEqual(len(result.issues), 1)
+
+    def test_zero_byte_file_completes(self):
+        self.media(content=b'')
+        events = []
+        result = core.run_import(self.job(), progress=events.append)
+        self.assertEqual(result.files[0].status, 'copied')
+        self.assertEqual(events[-1].done, events[-1].total)
 
 
-class InterfaceCompatibilityTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls._settings_directory = tempfile.TemporaryDirectory()
-        QtCore.QSettings.setDefaultFormat(QtCore.QSettings.IniFormat)
-        QtCore.QSettings.setPath(
-            QtCore.QSettings.IniFormat,
-            QtCore.QSettings.UserScope,
-            cls._settings_directory.name,
-        )
-        cls.application = QtWidgets.QApplication.instance() or QtWidgets.QApplication(
-            []
-        )
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        cls._settings_directory.cleanup()
-
-    def setUp(self) -> None:
-        settings = QtCore.QSettings(copyer.APP_ORGANIZATION, copyer.APP_NAME)
-        settings.clear()
-        settings.sync()
-
-    def test_window_matches_release_1_4_0_interface_baseline(self) -> None:
-        window = copyer.MediaImporterWindow()
-        self.addCleanup(window.close)
-
-        self.assertEqual(window.windowTitle(), "读卡器照片/视频导入工具")
-        self.assertEqual((window.width(), window.height()), (1100, 720))
-        self.assertEqual(
-            [group.title() for group in window.findChildren(QtWidgets.QGroupBox)],
-            ["读卡器 / 源路径", "导入到", "选择格式"],
-        )
-        self.assertEqual(
-            [button.text() for button in window.findChildren(QtWidgets.QPushButton)],
-            [
-                "自动识别",
-                "手动选择",
-                "选择文件夹",
-                "全选格式",
-                "扫描文件",
-                "开始导入",
-                "打开目标文件夹",
-                "删除存储卡已复制文件",
-            ],
-        )
-        self.assertEqual(
-            [
-                (checkbox.text(), checkbox.isChecked())
-                for checkbox in window.findChildren(QtWidgets.QCheckBox)
-            ],
-            [
-                ("RAW (.cr2/.cr3/...)", True),
-                ("JPEG (.jpg)", True),
-                ("视频 (.mp4/.mov)", False),
-            ],
-        )
-        self.assertEqual(
-            [
-                window.groups_table.horizontalHeaderItem(column).text()
-                for column in range(window.groups_table.columnCount())
-            ],
-            ["日期", "数量", "自定义后缀", "生成的文件夹名"],
-        )
-        self.assertEqual(window.progress_label.text(), "未开始")
-        self.assertEqual(window.log_output.placeholderText(), "执行日志...")
-        self.assertTrue(self.application.styleSheet())
-        self.assertTrue(
-            window.windowFlags() & QtCore.Qt.WindowType.FramelessWindowHint
-        )
-        self.assertIsInstance(window.title_bar, copyer.FramelessTitleBar)
-        self.assertIn(self.application.font().family(), copyer.UI_FONT_CANDIDATES)
-
-        palette = self.application.palette()
-        self.assertEqual(palette.color(QtGui.QPalette.Window).name(), "#e2e2de")
-        self.assertEqual(palette.color(QtGui.QPalette.WindowText).name(), "#222424")
-        self.assertEqual(palette.color(QtGui.QPalette.Base).name(), "#f2f2ee")
-        self.assertEqual(palette.color(QtGui.QPalette.Button).name(), "#e8e8e4")
-        self.assertEqual(palette.color(QtGui.QPalette.Highlight).name(), "#243746")
-        self.assertEqual(window.import_button.objectName(), "primaryAction")
-        self.assertEqual(window.delete_sources_button.objectName(), "dangerAction")
-
-    def test_all_custom_windows_are_frameless(self) -> None:
-        window = copyer.MediaImporterWindow()
-        self.addCleanup(window.close)
-        message_dialog = copyer.FramelessMessageDialog(
-            window,
-            "提示",
-            "源路径不存在，请先选择读卡器或文件夹。",
-            kind="warning",
-        )
-        self.addCleanup(message_dialog.close)
-        directory_dialog = copyer.FramelessDirectoryDialog(
-            window,
-            "选择目标文件夹",
-        )
-        self.addCleanup(directory_dialog.close)
-
-        for candidate in (window, message_dialog, directory_dialog):
-            self.assertTrue(
-                candidate.windowFlags() & QtCore.Qt.WindowType.FramelessWindowHint
-            )
-            self.assertIsInstance(candidate.title_bar, copyer.FramelessTitleBar)
-
-    def test_selected_font_covers_all_chinese_ui_characters(self) -> None:
-        window = copyer.MediaImporterWindow()
-        self.addCleanup(window.close)
-        source_text = Path(copyer.__file__).read_text(encoding="utf-8")
-        chinese_text = "".join(sorted(set(re.findall(r"[\u4e00-\u9fff]", source_text))))
-        raw_font = QtGui.QRawFont.fromFont(self.application.font())
-        missing_characters = sorted(
-            {
-                character
-                for character, glyph_index in zip(
-                    chinese_text,
-                    raw_font.glyphIndexesForString(chinese_text),
-                    strict=True,
-                )
-                if glyph_index == 0
-            }
-        )
-        self.assertEqual(missing_characters, [])
-
-    def test_group_suffix_updates_preview_and_import_plan(self) -> None:
-        window = copyer.MediaImporterWindow()
-        self.addCleanup(window.close)
-        sample_file = Path("sample.jpg")
-        window.file_groups = {"2026-07-12": [sample_file]}
-        window._populate_groups_table()
-
-        window.suffix_inputs[0].setText("海边")
-
-        self.assertEqual(window.groups_table.item(0, 3).text(), "2026-07-12-海边")
-        self.assertEqual(
-            window._build_import_plan(), [("2026-07-12-海边", [sample_file])]
-        )
-
-    def test_start_import_completes_through_worker_thread(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            source_file = root / "source.jpg"
-            source_file.write_bytes(b"photo")
-            target_directory = root / "target"
-            window = copyer.MediaImporterWindow()
-            self.addCleanup(window.close)
-            window.file_groups = {"2026-07-12": [source_file]}
-            window._populate_groups_table()
-            window.target_path_input.setText(str(target_directory))
-
-            window._start_import()
-            deadline = time.monotonic() + 5
-            while window._copy_thread is not None and time.monotonic() < deadline:
-                self.application.processEvents()
-                time.sleep(0.01)
-
-            self.assertIsNone(window._copy_thread)
-            self.assertEqual(window.progress_label.text(), "完成")
-            self.assertEqual(window.copied_source_files, [source_file])
-            self.assertEqual(
-                (target_directory / "2026-07-12" / "source.jpg").read_bytes(),
-                b"photo",
-            )
-            self.assertTrue(window.scan_button.isEnabled())
-            self.assertTrue(window.import_button.isEnabled())
-
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

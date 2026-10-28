@@ -1,0 +1,2 @@
+APP_VERSION = "1.5.0"
+APP_AUTHOR = "Oblivionis-ling"
