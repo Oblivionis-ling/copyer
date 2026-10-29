@@ -17,6 +17,6 @@
 
 设置中可查看支持格式、调整视频日期与显示偏好。请保留程序旁的 `_internal` 文件夹。
 
-[格式与日期](docs/FORMATS.md) · [开发文档](docs/DEVELOPMENT.md) · [第三方许可](THIRD_PARTY.md)
+[格式与日期](docs/FORMATS.md) · [设计档案](docs/design/README.md) · [开发文档](docs/DEVELOPMENT.md) · [第三方许可](THIRD_PARTY.md)
 
 by Oblivionis-ling

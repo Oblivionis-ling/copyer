@@ -31,9 +31,16 @@ _work/
 vendor/exiftool/
 /docs/v1.5.1/验收/
 /docs/v1.5.2/验收/
+/docs/v1.3.3/验收/
+/docs/design/验收/
 
 # Local design iterations and desktop QA evidence
 /design-qa.md
 /docs/v1.5.0/*
 !/docs/v1.5.0/使用说明.txt
 !/docs/v1.5.0/RELEASE.md
+!/docs/v1.5.0/Copyer_UI设计图_*.png
+!/docs/v1.5.0/Copyer_设计与功能评审_*.md
+!/docs/v1.5.0/Copyer_图标设计记录_*.md
+!/docs/v1.5.0/Copyer_图像提示词_*.json
+!/docs/v1.5.0/运行状态/

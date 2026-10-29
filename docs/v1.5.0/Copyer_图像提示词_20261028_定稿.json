@@ -1,0 +1,24 @@
+{
+  "date": "2026-10-28",
+  "method": "built-in image_gen",
+  "canvas": {
+    "width": 1536,
+    "height": 1024
+  },
+  "user_selected_baseline": "ImageGen 本地生成缓存（未归档）",
+  "requested_changes": [
+    "为已有表头方框添加可见全选标签",
+    "标题旁加入 v1.5.0 · by Oblivionis-ling"
+  ],
+  "preserve": [
+    "用户选定的液态玻璃质感",
+    "纯白与中性灰配色",
+    "已认可的小方形复选框尺寸",
+    "下划线后缀输入",
+    "现有布局与进度条"
+  ],
+  "prompt": "Use case: precise-object-edit / ui-mockup.\nThis attached image is the user's explicitly selected FINAL visual baseline for Copyer. Make ONLY TWO TEXT ADDITIONS. Output one image, exactly 1536 x 1024, same composition. Current date anchor: 2026-10-28.\n\nEDIT 1 — header metadata:\nKeep the existing top-left Copyer title exactly as it is. In the empty space immediately to its right, on the same horizontal title line, add exactly:\nv1.5.0 · by Oblivionis-ling\nUse smaller regular-weight NEUTRAL GRAY type, approximately 18–20 px versus the existing larger Copyer title. Start around x=185 and keep a comfortable gap from Copyer; align visually with its baseline. Keep the metadata as one line. Match the exact capitalization and spelling: v1.5.0 and by Oblivionis-ling. No badge, pill, extra icon, hyperlink underline or subtitle on a second line.\n\nEDIT 2 — select-all label:\nThere is already a small checked square checkbox on the left of the list header at approximately x=69,y=414, directly below the file-type row. Preserve that exact checkbox, size and checked state. Add the Chinese label 全选 immediately to its right, around x=106, vertically centered on the checkbox and aligned like the RAW/JPEG labels. Use the same readable dark neutral font as the rest of the UI. This is a select-all control for all date groups. Do NOT add a second checkbox. Keep the 文件 header on the right.\n\nSTRICT PRESERVATION:\nThe user explicitly chose this reference because its LIQUID GLASS MATERIAL is better. Preserve its exact glass rendering: fine double refractive rims, white inner highlights, curved neutral-gray optical edges, clear centers and soft localized shadows on both top path controls and the lower-right import button. Do not flatten the glass into ordinary cards, enhance or reinterpret its material, change the button shape, or recolor anything.\nKeep the pure white background and neutral grays, with absolutely no blue or warm tint. Keep the seven approved tiny square checkbox dimensions. Keep settings as a plain gear icon. Keep all current typography, labels, paths, folder-selection actions, row positions, underlined suffix inputs, focused 城市 caret, counts 62/44/22, dividers, chevrons, 待导入 status, empty progress bar, and transparent 导入 128 个文件 button EXACTLY.\nNo other visual changes. Do not move controls or add panels, headings, decorations or copy. Only append the version/author metadata in the title bar and label the existing header checkbox 全选.",
+  "generated_file": "ImageGen 本地生成缓存（未归档）",
+  "final_file": "docs/v1.5.0/Copyer_UI设计图_20261028_定稿.png",
+  "note": "设计定稿；v1.5.0 为目标版本，应用源码未修改。"
+}

@@ -1,0 +1,91 @@
+{
+  "date": "2026-10-28",
+  "method": "built-in image_gen",
+  "dimensions": {
+    "width": 1536,
+    "height": 1024
+  },
+  "edits": [
+    {
+      "purpose": "去除蓝色偏色",
+      "reference": "ImageGen 本地生成缓存（未归档）",
+      "prompt": "Use case: precise-object-edit / ui-mockup.\nEdit the attached exact Copyer desktop screenshot to REMOVE ITS BLUE COLOR CAST. This is a strictly scoped COLOR correction, not a redesign. Single 1536 x 1024 image, current date anchor 2026-10-28.\n\nThe user wants a PURE, CLEAN, NEUTRAL WHITE interface. Replace the pale blue-gray ambient background with flat pure white #FFFFFF across all empty parts of the window. No cool-white tint, icy blue wash, cyan shadows, lavender, cream, yellow, beige, warm-gray tint or colored atmosphere. The entire UI should be ACHROMATIC: white, black and neutral grays only. Background pixels away from controls and shadows should be white; neutral gray colors should have equal R, G, B values. No background gradient, cloudy texture or broad light/shadow wash.\n\nKeep LIQUID GLASS but remove every blue tint from the glass: the source/target panels and import button stay clear and transparent, with neutral-white highlights, thin NEUTRAL GRAY contours, localized refractive edges and soft NEUTRAL GRAY shadows. Let the pure white background show through. The import button stays transparent with dark charcoal text; no solid dark fill, opaque gray fill, chrome or metallic sheen. Preserve enough restrained gray edge contrast to recognize glass on white. Do not add any decorative backdrop to make it visible.\n\nPreserve EXACTLY:\n- Title Copyer, its size and location.\n- All seven user-approved tiny SQUARE checkboxes, their size, shape and alignment.\n- Plain gear icon only, without a glass background; Windows min/max/close.\n- Source EOS_DIGITAL (E:) and E:\\DCIM; target F:\\影像库; both 选择文件夹 actions; RAW, JPEG, 视频, 重新扫描.\n- No 导入文件夹 heading; only 文件 above counts.\n- Read-only dates and UNDERLINED suffix inputs, with NO rectangular input fills or boxes. Row 1: 2026-10-27 / 海边 / 62. Row 2: 2026-10-26 / 城市 with caret and darker focus underline / 44. Row 3: 2026-10-25 / 添加后缀 placeholder / 22.\n- Row separators, detail chevrons, same typography, spacing and geometry.\n- Bottom 待导入, empty neutral pale-gray progress track, clear transparent rounded-rectangle 导入 128 个文件 button.\nKeep all text and icons charcoal/black or neutral gray. Do not move, resize, remove or add UI. Output one complete sharp UI design. The only intended visible change is pure white and neutral gray replacing all bluish color.",
+      "output": "ImageGen 本地生成缓存（未归档）"
+    },
+    {
+      "purpose": "纯白底上保留中性玻璃边缘",
+      "reference": "ImageGen 本地生成缓存（未归档）",
+      "prompt": "Use case: precise-object-edit / ui-mockup.\nEdit this exact PURE WHITE Copyer screenshot. Output one 1536 x 1024 image. Current date anchor 2026-10-28. The pure white and neutral grayscale color correction is APPROVED and must remain unchanged.\n\nONLY refine the optical material of the TWO TOP PATH CONTROLS and the BOTTOM-RIGHT IMPORT BUTTON. The current rendering has become plain flat white outlined cards. Restore recognizable CLEAR LIQUID GLASS using its perimeter optics, without adding any color or changing the white background.\n\nMaterial target: a very thin, transparent, gently lensed optical-glass surface over WHITE. Keep each center transparent and almost indistinguishable from the white canvas. Along the existing rounded perimeter add a delicate variable double contour: a thin localized neutral-gray refractive edge, a narrow bright-white inner glint, subtle depth/refraction at curved corners, and a soft SHORT neutral-gray shadow just below the rim. The edge thickness is only a few pixels, not a thick bezel. Highlights vary subtly with the rounded contour; avoid a single uniform gray border looking like an ordinary outline button. The result should read as real clear optical material while remaining quiet and usable.\n\nCRITICAL COLOR CONSTRAINT: the full interface is ACHROMATIC. Blank canvas remains pure #FFFFFF. Every reflection, refraction, border, highlight and shadow is WHITE or NEUTRAL GRAY with equal R/G/B values. Absolutely no blue, cyan, cool tint, purple, yellow, cream, warm gray or color fringing. No broad gray background wash or ambient gradients. No metallic chrome, silver frame, opaque white slab, milky fill, bright bloom, dark button, thick bevel or plastic shine.\n\nPreserve every other element EXACTLY: Copyer title; all approved tiny square checkbox dimensions; plain settings gear; window buttons; all labels and paths; source EOS_DIGITAL (E:), E:\\DCIM; destination F:\\影像库; both 选择文件夹 controls; three date rows and counts 62,44,22; UNDERLINED suffix inputs 海边, 城市 with focused rule and caret, 添加后缀 placeholder; neutral row dividers and text; bottom 待导入, empty neutral-gray track; primary label 导入 128 个文件 in crisp dark text.\nDo not move, resize, restyle or add any UI. Do not change the approved pure-white color balance. Only restore subtle clear-glass edge optics on those three existing controls.",
+      "output": "ImageGen 本地生成缓存（未归档）"
+    }
+  ],
+  "selected_image": "docs/v1.5.0/运行状态/纯白修订/Copyer_界面_待导入_20261028.png",
+  "color_spot_checks": [
+    {
+      "position": [
+        800,
+        80
+      ],
+      "rgb": [
+        253,
+        253,
+        253
+      ]
+    },
+    {
+      "position": [
+        760,
+        365
+      ],
+      "rgb": [
+        254,
+        254,
+        254
+      ]
+    },
+    {
+      "position": [
+        950,
+        790
+      ],
+      "rgb": [
+        255,
+        254,
+        255
+      ]
+    },
+    {
+      "position": [
+        450,
+        975
+      ],
+      "rgb": [
+        254,
+        254,
+        254
+      ]
+    },
+    {
+      "position": [
+        600,
+        280
+      ],
+      "rgb": [
+        248,
+        248,
+        248
+      ]
+    },
+    {
+      "position": [
+        1350,
+        950
+      ],
+      "rgb": [
+        247,
+        247,
+        247
+      ]
+    }
+  ]
+}
