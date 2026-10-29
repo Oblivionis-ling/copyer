@@ -30,6 +30,7 @@ Thumbs.db
 _work/
 vendor/exiftool/
 /docs/v1.5.1/验收/
+/docs/v1.5.2/验收/
 
 # Local design iterations and desktop QA evidence
 /design-qa.md

@@ -9,12 +9,12 @@ from collections import Counter
 from pathlib import Path
 from threading import Event
 
-import qtawesome as qta
 from PySide6 import QtCore, QtGui, QtWidgets
 
 import copyer_core as core
 from copyer_version import APP_AUTHOR, APP_VERSION
 from copyer_materials import PaperGlassCanvas, paint_control_glass
+from copyer_icons import ui_icon
 
 APP_ORGANIZATION = "copyer"
 APP_NAME = "copyer"
@@ -30,14 +30,6 @@ def default_window_size(screen) -> QtCore.QSize:
 
 def resource_path(name: str) -> Path:
     return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / name
-
-
-def ui_icon(name: str, color: str = "#151515") -> QtGui.QIcon:
-    names = {"sd": "ri.sd-card-line", "folder-outline": "ph.folder",
-             "cog-outline": "ph.gear-six", "refresh": "ph.arrow-clockwise",
-             "chevron-down": "ph.caret-down", "chevron-right": "ph.caret-right",
-             "window-minimize": "ph.minus", "window-maximize": "ph.square", "close": "ph.x"}
-    return qta.icon(names.get(name, "mdi." + name), color=color, color_disabled="#909090")
 
 
 def font(widget: QtWidgets.QWidget, pixels: float, *, bold: bool = False, medium: bool = False) -> None:

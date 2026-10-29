@@ -64,8 +64,8 @@ class InterfaceTests(unittest.TestCase):
         self.assertEqual(self.window.phase, 'ready')
 
     def test_version_style_keyboard_and_accessible_names(self):
-        self.assertEqual(self.window.windowTitle(), 'Copyer 1.5.1')
-        self.assertEqual(self.window.meta_label.text(), 'v1.5.1 · by Oblivionis-ling')
+        self.assertEqual(self.window.windowTitle(), f'Copyer {ui.APP_VERSION}')
+        self.assertEqual(self.window.meta_label.text(), f'v{ui.APP_VERSION} · by Oblivionis-ling')
         self.assertEqual(self.app.palette().color(QtGui.QPalette.Window).name(), '#ffffff')
         self.assertEqual(self.window.window_controls[0].accessibleName(), '设置')
         self.scan()

@@ -55,11 +55,8 @@ if ($buildExitCode -ne 0) { exit $buildExitCode }
 $releaseVersion = & $pythonExecutable -c "from copyer_version import APP_VERSION; print(APP_VERSION)"
 $releaseDist = if ($DistPath) { $DistPath } else { Join-Path $projectRoot "dist" }
 $releaseDirectory = Join-Path $releaseDist "copyer-$releaseVersion"
-$instructionsPath = Join-Path $projectRoot "docs\v$releaseVersion\使用说明.txt"
-if (Test-Path -LiteralPath $instructionsPath) {
-    Copy-Item -LiteralPath $instructionsPath -Destination $releaseDirectory
-}
-Copy-Item -LiteralPath (Join-Path $projectRoot "THIRD_PARTY.md") -Destination $releaseDirectory
 & $pythonExecutable (Join-Path $projectRoot "tools\collect_licenses.py") $releaseDirectory
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $pythonExecutable (Join-Path $projectRoot "tools\verify_package.py") $releaseDirectory
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 exit 0

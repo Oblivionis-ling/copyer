@@ -138,7 +138,7 @@ def runtime_command() -> list[str]:
     folder = root / ("exiftool" if getattr(sys, "frozen", False) else "vendor/exiftool") / "exiftool_files"
     perl, script = folder / "perl.exe", folder / "exiftool.pl"
     if not perl.is_file() or not script.is_file():
-        raise MetadataError("拍摄时间读取器缺失：请完整解压便携包；开发环境请运行 tools/fetch_exiftool.py。")
+        raise MetadataError("拍摄时间读取组件缺失，请重新完整解压 Copyer。")
     # Invoke Perl directly so cancellation terminates the actual reader, not a launcher.
     return [str(perl), "-I" + str(folder / "lib"), str(script)]
 
