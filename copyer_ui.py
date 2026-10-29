@@ -586,7 +586,7 @@ class FileTableModel(QtCore.QAbstractTableModel):
         if role == QtCore.Qt.ItemDataRole.DisplayRole:
             return ("", media.path.name, format_bytes(media.size), media.date_source)[index.column()]
         if role == QtCore.Qt.ItemDataRole.ToolTipRole:
-            return str(media.path)
+            return media.date_detail if index.column() == 3 else str(media.path)
         return None
 
     def flags(self, index):
@@ -754,7 +754,7 @@ class MessageDialog(ThemedDialog):
 
 class SettingsDialog(ThemedDialog):
     def __init__(self, owner):
-        super().__init__(owner, "设置", (520, 430))
+        super().__init__(owner, "设置", (520, 530))
         layout = self.content_layout
         layout.addWidget(QtWidgets.QLabel("同名文件：自动重命名"))
         self.duplicate = SmallCheckBox("跳过内容完全相同的文件")
@@ -765,7 +765,8 @@ class SettingsDialog(ThemedDialog):
         formats.setHorizontalSpacing(12)
         formats.setVerticalSpacing(6)
         for row, (name, extensions) in enumerate((("RAW", " ".join(sorted(core.RAW_EXTENSIONS))),
-                                                  ("JPEG", ".jpg .jpeg"), ("视频", ".mp4 .mov .m4v"))):
+                                                  ("照片", " ".join(sorted(core.PHOTO_EXTENSIONS))),
+                                                  ("视频", " ".join(sorted(core.VIDEO_EXTENSIONS))))):
             label = QtWidgets.QLabel(name)
             label.setStyleSheet("color:#666666")
             values = QtWidgets.QLabel(extensions)
@@ -775,10 +776,15 @@ class SettingsDialog(ThemedDialog):
             formats.addWidget(values, row, 1)
         formats.setColumnStretch(1, 1)
         layout.addLayout(formats)
-        date_help = QtWidgets.QLabel("日期：JPEG 优先使用拍摄时间，其他情况使用文件修改时间。")
+        date_help = QtWidgets.QLabel("日期：优先使用拍摄时间，其次为内容创建时间；缺失时使用修改时间。明细中可查看来源。")
         date_help.setStyleSheet("color:#666666")
         date_help.setWordWrap(True)
         layout.addWidget(date_help)
+        self.video_time = SmallCheckBox("视频容器时间按 UTC 转为本机时间")
+        self.video_time.scale = .72
+        self.video_time.setChecked(owner.video_time_utc)
+        self.video_time.setToolTip("仅影响未标注时区的视频容器日期。设备若直接写入本地时间，请关闭；带时区的拍摄字段始终优先。")
+        layout.addWidget(self.video_time)
         layout.addSpacing(4)
         appearance = QtWidgets.QHBoxLayout()
         appearance.setSpacing(24)
@@ -870,6 +876,7 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
         self.source = str(self.settings.value("paths/source", ""))
         self.target = str(self.settings.value("paths/target", str(Path.home() / "Pictures")))
         self.skip_identical = self.settings.value("copy/skip_identical", True, type=bool)
+        self.video_time_utc = self.settings.value("dates/video_time_utc", True, type=bool)
         self.reduce_transparency = self.settings.value("display/reduce_transparency", system_reduce_transparency(), type=bool)
         self.reduce_motion = self.settings.value("display/reduce_motion", system_reduce_motion(), type=bool)
         self.apply_material_preferences()
@@ -947,7 +954,8 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
         self.target_card.choose_requested.connect(self.choose_target)
         self.source_card.devices_requested.connect(self.show_devices)
         self.raw_checkbox = SmallCheckBox("RAW", self.canvas)
-        self.jpeg_checkbox = SmallCheckBox("JPEG", self.canvas)
+        self.jpeg_checkbox = SmallCheckBox("照片", self.canvas)
+        self.jpeg_checkbox.setToolTip("JPEG / HEIC / HEIF；RAW 使用左侧选项")
         self.video_checkbox = SmallCheckBox("视频", self.canvas)
         self.format_boxes = [self.raw_checkbox, self.jpeg_checkbox, self.video_checkbox]
         for box, key in zip(self.format_boxes, ("raw", "jpg", "mp4")):
@@ -1263,11 +1271,12 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
         for key, box in zip(("raw", "jpg", "mp4"), self.format_boxes):
             self.settings.setValue("formats/"+key, box.isChecked())
         self.settings.setValue("copy/skip_identical", self.skip_identical)
+        self.settings.setValue("dates/video_time_utc", self.video_time_utc)
         self.settings.sync()
 
     def selected_extensions(self):
         result = set()
-        for box, extensions in zip(self.format_boxes, (core.RAW_EXTENSIONS, core.JPEG_EXTENSIONS, core.VIDEO_EXTENSIONS)):
+        for box, extensions in zip(self.format_boxes, (core.RAW_EXTENSIONS, core.PHOTO_EXTENSIONS, core.VIDEO_EXTENSIONS)):
             if box.isChecked():
                 result.update(extensions)
         return result
@@ -1452,7 +1461,8 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
         self.status_label.setText("正在扫描")
         self.progress_bar.setRange(0, 0)
         self.empty_label.setText("正在查找媒体文件…")
-        self._start_worker(lambda cancel, emit: core.scan(source, extensions, cancel, lambda count, path, groups: emit((count, path, groups))), self.scan_finished, self.scan_progress)
+        video_time_utc = self.video_time_utc
+        self._start_worker(lambda cancel, emit: core.scan(source, extensions, cancel, lambda count, path, groups: emit((count, path, groups)), quicktime_utc=video_time_utc), self.scan_finished, self.scan_progress)
 
     def scan_progress(self, data):
         count, path, groups = data
@@ -1601,6 +1611,8 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
     def show_settings(self):
         dialog = SettingsDialog(self)
         if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            date_policy_changed = self.video_time_utc != dialog.video_time.isChecked()
+            self.video_time_utc = dialog.video_time.isChecked()
             self.skip_identical = dialog.duplicate.isChecked()
             self.reduce_transparency = dialog.transparency.isChecked()
             self.reduce_motion = dialog.motion.isChecked()
@@ -1608,6 +1620,8 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
             self.settings.setValue("display/reduce_motion", self.reduce_motion)
             self.apply_material_preferences()
             self.save_settings()
+            if date_policy_changed:
+                self.parameters_changed()
         dialog.deleteLater()
 
     def notify(self, title, message):

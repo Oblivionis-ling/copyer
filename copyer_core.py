@@ -15,16 +15,9 @@ from datetime import date, datetime
 from pathlib import Path
 from threading import Event
 
-from PIL import Image
-
-RAW_EXTENSIONS = frozenset({".cr2", ".cr3", ".nef", ".arw", ".raf", ".orf", ".rw2", ".dng"})
-JPEG_EXTENSIONS = frozenset({".jpg", ".jpeg"})
-VIDEO_EXTENSIONS = frozenset({".mp4", ".mov", ".m4v"})
+from copyer_metadata import (Cancelled, MetadataReader, RAW_EXTENSIONS, JPEG_EXTENSIONS,
+                             PHOTO_EXTENSIONS, VIDEO_EXTENSIONS)
 CHUNK_SIZE = 1024 * 1024
-
-
-class Cancelled(Exception):
-    pass
 
 
 def check_cancel(cancel: Event) -> None:
@@ -66,25 +59,9 @@ def build_destination_folder_name(date_text: str, suffix: str) -> str:
 
 
 def read_exif_datetime(path: Path) -> datetime | None:
-    if path.suffix.lower() not in JPEG_EXTENSIONS:
-        return None
-    try:
-        with Image.open(path) as image:
-            exif = image.getexif()
-            details = exif.get_ifd(34665) if 34665 in exif else {}
-            for tag in (36867, 36868, 306):
-                value = details.get(tag) or exif.get(tag)
-                if not value:
-                    continue
-                try:
-                    if isinstance(value, bytes):
-                        value = value.decode("ascii")
-                    return datetime.strptime(str(value).strip("\x00 "), "%Y:%m:%d %H:%M:%S")
-                except (ValueError, UnicodeError):
-                    continue
-    except (OSError, ValueError, TypeError, KeyError, OverflowError, SyntaxError, Image.DecompressionBombError):
-        pass
-    return None
+    # Compatibility entry point; scanning reuses a reader for the whole task.
+    with MetadataReader() as reader:
+        return reader.read(path).value
 
 
 def get_file_date(path: Path) -> date:
@@ -106,18 +83,23 @@ class MediaFile:
     device: int
     inode: int
     date_source: str = "文件修改时间"
+    date_detail: str = ""
 
     @classmethod
-    def inspect(cls, path: Path) -> "MediaFile":
+    def inspect(cls, path: Path, reader: MetadataReader | None = None) -> "MediaFile":
         if is_link(path):
             raise ValueError("跳过链接或重解析文件。")
         info = path.stat()
         if not stat.S_ISREG(info.st_mode):
             raise ValueError("不是普通文件。")
-        captured = read_exif_datetime(path)
-        day = (captured or datetime.fromtimestamp(info.st_mtime)).date().isoformat()
+        if reader is None:
+            with MetadataReader() as single:
+                captured = single.read(path)
+        else:
+            captured = reader.read(path)
+        day = (captured.value or datetime.fromtimestamp(info.st_mtime)).date().isoformat()
         return cls(path.resolve(), day, info.st_size, info.st_mtime_ns,
-                   info.st_dev, info.st_ino, "EXIF 拍摄时间" if captured else "文件修改时间")
+                   info.st_dev, info.st_ino, captured.source, captured.detail)
 
     def matches(self, info: os.stat_result) -> bool:
         return (info.st_size, info.st_mtime_ns, info.st_dev, info.st_ino) == (
@@ -144,7 +126,8 @@ class ScanResult:
 
 
 def scan(source_text: str, extensions: Iterable[str], cancel: Event | None = None,
-         progress: Callable[[int, str, dict[str, int]], None] | None = None) -> ScanResult:
+         progress: Callable[[int, str, dict[str, int]], None] | None = None,
+         *, quicktime_utc: bool = True) -> ScanResult:
     cancel = cancel or Event()
     source = directory_path(source_text, must_exist=True)
     allowed = {ext.lower() for ext in extensions}
@@ -155,6 +138,7 @@ def scan(source_text: str, extensions: Iterable[str], cancel: Event | None = Non
     pending = [source]
     found = 0
     last_update = 0.0
+    reader = MetadataReader(cancel, quicktime_utc=quicktime_utc)
     try:
         while pending:
             check_cancel(cancel)
@@ -170,7 +154,7 @@ def scan(source_text: str, extensions: Iterable[str], cancel: Event | None = Non
                             elif entry.is_dir(follow_symlinks=False):
                                 pending.append(path)
                             elif path.suffix.lower() in allowed and entry.is_file(follow_symlinks=False):
-                                media = MediaFile.inspect(path)
+                                media = MediaFile.inspect(path, reader)
                                 groups[media.date_text].append(media)
                                 found += 1
                             now = time.monotonic()
@@ -183,6 +167,10 @@ def scan(source_text: str, extensions: Iterable[str], cancel: Event | None = Non
                 result.issues.append(FileIssue(current, str(exc)))
     except Cancelled:
         result.cancelled = True
+    finally:
+        reader.close()
+    if reader.fatal_error:
+        result.issues.append(FileIssue(source, reader.fatal_error))
     if identity(source) != result.source_identity:
         raise ValueError("来源设备已变化，请重新扫描。")
     result.groups = {key: sorted(value, key=lambda item: str(item.path).casefold())

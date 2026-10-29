@@ -36,6 +36,9 @@ if (Test-Path $projectPython) {
     exit 1
 }
 
+& $pythonExecutable (Join-Path $projectRoot "tools\fetch_exiftool.py")
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 $pyInstallerArguments = @("--noconfirm", "--clean")
 if ($DistPath) {
     $pyInstallerArguments += @("--distpath", $DistPath)
@@ -56,6 +59,7 @@ $instructionsPath = Join-Path $projectRoot "docs\v$releaseVersion\使用说明.t
 if (Test-Path -LiteralPath $instructionsPath) {
     Copy-Item -LiteralPath $instructionsPath -Destination $releaseDirectory
 }
+Copy-Item -LiteralPath (Join-Path $projectRoot "THIRD_PARTY.md") -Destination $releaseDirectory
 & $pythonExecutable (Join-Path $projectRoot "tools\collect_licenses.py") $releaseDirectory
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 exit 0

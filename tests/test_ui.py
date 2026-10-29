@@ -64,8 +64,8 @@ class InterfaceTests(unittest.TestCase):
         self.assertEqual(self.window.phase, 'ready')
 
     def test_version_style_keyboard_and_accessible_names(self):
-        self.assertEqual(self.window.windowTitle(), 'Copyer 1.5.0')
-        self.assertEqual(self.window.meta_label.text(), 'v1.5.0 · by Oblivionis-ling')
+        self.assertEqual(self.window.windowTitle(), 'Copyer 1.5.1')
+        self.assertEqual(self.window.meta_label.text(), 'v1.5.1 · by Oblivionis-ling')
         self.assertEqual(self.app.palette().color(QtGui.QPalette.Window).name(), '#ffffff')
         self.assertEqual(self.window.window_controls[0].accessibleName(), '设置')
         self.scan()
@@ -195,7 +195,7 @@ class InterfaceTests(unittest.TestCase):
 
     def test_close_waits_for_worker_and_cancels_safely(self):
         entered = Event()
-        def slow_scan(source, extensions, cancel, progress):
+        def slow_scan(source, extensions, cancel, progress, **options):
             entered.set()
             cancel.wait(3)
             return core.ScanResult(self.source, core.identity(self.source), cancelled=True)
@@ -212,19 +212,35 @@ class InterfaceTests(unittest.TestCase):
         def cancel_changes():
             dialog = self.app.activeModalWidget()
             dialog.duplicate.setChecked(False)
+            dialog.video_time.setChecked(False)
             QtTest.QTest.keyClick(dialog, QtCore.Qt.Key.Key_Escape)
         QtCore.QTimer.singleShot(0, cancel_changes)
         self.window.show_settings()
         self.assertTrue(self.window.skip_identical)
+        self.assertTrue(self.window.video_time_utc)
 
+        self.scan()
         def save_changes():
             dialog = self.app.activeModalWidget()
             dialog.duplicate.setChecked(False)
+            dialog.video_time.setChecked(False)
             QtTest.QTest.mouseClick(dialog.accept_button, QtCore.Qt.MouseButton.LeftButton)
         QtCore.QTimer.singleShot(0, save_changes)
         self.window.show_settings()
         self.assertFalse(self.window.skip_identical)
         self.assertFalse(self.settings.value('copy/skip_identical', True, type=bool))
+        self.assertFalse(self.settings.value('dates/video_time_utc', True, type=bool))
+        self.assertIsNone(self.window.scan_result)
+
+    def test_photo_selection_includes_heif_and_details_explain_date(self):
+        self.assertTrue({'.jpg', '.jpeg', '.heic', '.heif', '.hif'} <= self.window.selected_extensions())
+        self.window.jpeg_checkbox.setChecked(False)
+        self.assertNotIn('.heic', self.window.selected_extensions())
+        self.window.jpeg_checkbox.setChecked(True)
+        self.scan()
+        media = next(file for file in self.window.scan_result.files if file.path.suffix == '.jpg')
+        model = ui.FileTableModel([media], {media.path}, True)
+        self.assertIn('2026', model.data(model.index(0, 3), QtCore.Qt.ItemDataRole.ToolTipRole))
 
     def test_custom_dialog_keyboard_defaults_and_title_drag(self):
         dialog = ui.MessageDialog(self.window, '任务正在进行', '停止当前任务后关闭？', question=True)

@@ -2,11 +2,19 @@
 
 Windows 照片与视频导入工具。按日期整理存储卡或文件夹中的媒体，选择需要的文件，再导入到影像库。
 
-当前版本：**1.5.0** · by **Oblivionis-ling**
+当前版本：**1.5.1** · by **Oblivionis-ling**
 
-[下载 Windows x64 便携版](https://github.com/Oblivionis-ling/copyer/releases/download/v1.5.0/Copyer-v1.5.0-Windows-x64.zip) · [发布说明](https://github.com/Oblivionis-ling/copyer/releases/tag/v1.5.0)
+[下载 Windows 便携版](https://github.com/Oblivionis-ling/copyer/releases/download/v1.5.1/Copyer-v1.5.1-Windows-x64.zip) · [v1.5.1 更新说明](docs/v1.5.1/RELEASE.md)
 
-![Copyer v1.5.0](docs/screenshots/copyer-1.5.0.png)
+![Copyer v1.5.1](docs/screenshots/copyer-1.5.1.png)
+
+## v1.5.1
+
+- RAW、JPEG/HEIF 和视频均读取文件内的日期元数据，优先使用拍摄日期。
+- RAW 从 8 种扩展到 25 种扩展名，包含佳能 CR3、DJI / Apple ProRAW 的 DNG；新增 HEIC、HEIF、HIF 照片识别。
+- iPhone 视频优先使用带时区的拍摄日期；未标注时区的视频容器时间默认按 UTC 转为本机时间，可在设置中改为设备原值。
+- 文件明细显示真实日期来源，悬停可查看字段、原始值和归档时间。元数据缺失或读取失败时明确标注修改时间回退。
+- 内置 ExifTool 13.60，扫描期间复用一个后台进程；支持取消、超时和异常退出处理，无需用户安装依赖。
 
 ## v1.5.0
 
@@ -26,7 +34,7 @@ Qt 实现的是适用于 Windows 的玻璃视觉效果，不调用 Apple 平台�
 ## 使用
 
 1. 在“来源”选择读卡器或文件夹；设备菜单可切换自动发现的可移动磁盘。
-2. 在“导入到”选择目标，勾选 RAW、JPEG 或视频，点击“重新扫描”。
+2. 在“导入到”选择目标，勾选 RAW、照片或视频，点击“重新扫描”。“照片”包括 JPEG 和 HEIF 系列。
 3. 用全选、日期行或明细里的复选框选择文件；需要时填写后缀，例如生成 `2026-10-27-海边`。
 4. 点击“导入 N 个文件”。过程中可以取消；完成后点击“打开文件夹”。
 5. 部分失败时查看文件及原因，处理原因后点击“重试失败项”。源文件有变化时，需要重新扫描。
@@ -39,11 +47,27 @@ Qt 实现的是适用于 Windows 的玻璃视觉效果，不调用 Apple 平台�
 
 | 类型 | 扩展名 | 日期依据 |
 | --- | --- | --- |
-| RAW | `.cr2` `.cr3` `.nef` `.arw` `.raf` `.orf` `.rw2` `.dng` | 文件修改时间 |
-| JPEG | `.jpg` `.jpeg` | EXIF 拍摄时间 → 数字化时间 → 图像时间 → 文件修改时间 |
-| 视频 | `.mp4` `.mov` `.m4v` | 文件修改时间 |
+| RAW | 25 种，见下表 | EXIF / 厂商拍摄时间 → 内容创建时间 → 修改时间 |
+| 照片 | `.jpg` `.jpeg` `.heic` `.heif` `.hif` | EXIF / XMP 拍摄时间 → 内容创建时间 → 修改时间 |
+| 视频 | `.mp4` `.mov` `.m4v` | 拍摄字段（如 Apple CreationDate）→ XMP / 容器创建时间 → 修改时间 |
 
-扩展名不区分大小写。JPEG 可在明细中预览；RAW 和视频当前不解码预览，也不读取它们的拍摄元数据。
+| 厂商 / 格式 | RAW 扩展名 |
+| --- | --- |
+| 佳能 | `.crw` `.cr2` `.cr3` |
+| 尼康 | `.nef` `.nrw` |
+| 索尼 | `.arw` `.srf` `.sr2` |
+| 富士 / 奥林巴斯及 OM SYSTEM | `.raf` / `.orf` |
+| 松下 | `.rw2` `.raw` |
+| 宾得 / 三星 | `.pef` / `.srw` |
+| 哈苏 / 徕卡 | `.3fr` `.fff` / `.rwl` |
+| 适马 / 美能达 | `.x3f` / `.mrw` |
+| Phase One / Leaf | `.iiq` `.mos` |
+| 柯达 | `.dcr` `.kdc` `.k25` |
+| 通用 DNG（含 DJI、Apple ProRAW） | `.dng` |
+
+扩展名不区分大小写。读取元数据不需要解码影像；预览仍仅支持 JPEG。
+
+带时区的拍摄日期保留拍摄地的日历日期。QuickTime 的整数容器日期按规范应为 UTC，但部分相机会写本地时间：遇到这种设备，在设置中关闭“视频容器时间按 UTC 转为本机时间”，然后重新扫描。容器创建时间也可能来自剪辑或导出，因此不会标成“拍摄时间”。文件没有有效元数据时，无法恢复原本的拍摄时间；明细会显示回退原因。
 
 ## 导入规则
 
@@ -58,7 +82,7 @@ Qt 实现的是适用于 Windows 的玻璃视觉效果，不调用 Apple 平台�
 
 ## 运行与构建
 
-下载并完整解压便携 ZIP，运行 `copyer-1.5.0/copyer-1.5.0.exe`，须保留旁边的 `_internal` 文件夹。
+完整解压便携 ZIP，运行 `copyer-1.5.1/copyer-1.5.1.exe`，须保留旁边的 `_internal` 文件夹（含元数据读取器）。
 
 开发环境：Windows 10/11、Python 3.11、PySide6。建议使用项目内 Conda 环境：
 
@@ -66,6 +90,7 @@ Qt 实现的是适用于 Windows 的玻璃视觉效果，不调用 Apple 平台�
 conda create -y -p .\.conda_env python=3.11 pip
 $env:PYTHONNOUSERSITE = '1'
 .\.conda_env\python.exe -m pip install -r requirements.txt
+.\.conda_env\python.exe tools\fetch_exiftool.py
 .\.conda_env\python.exe copyer.py
 ```
 
@@ -77,7 +102,7 @@ $env:PYTHONNOUSERSITE = '1'
 .\build_copyer.ps1
 ```
 
-构建脚本使用 `.conda_env\python.exe` 并隔离 DLL 搜索路径。`copyer.spec` 从 `copyer_version.py` 读取版本，生成 `dist/copyer-1.5.0/`。源码仓库不提交环境、构建输出和便携压缩包。
+构建脚本使用 `.conda_env\python.exe` 并隔离 DLL 搜索路径。`copyer.spec` 从 `copyer_version.py` 读取版本，生成 `dist/copyer-1.5.1/`。首次构建会下载固定版本的 ExifTool，并校验官方 SHA-256；也可以用 `tools/fetch_exiftool.py --archive 下载好的ZIP` 离线准备。源码仓库不提交环境、第三方二进制、构建输出和便携压缩包。
 
 ## 验证与项目结构
 
@@ -85,9 +110,10 @@ $env:PYTHONNOUSERSITE = '1'
 - `copyer_ui.py`：原生 Qt 界面和任务状态。
 - `copyer_materials.py`：中性方格、控件折射和透明窗框绘制。
 - `copyer_core.py`：扫描、计划、复制和校验，不依赖界面。
+- `copyer_metadata.py`：RAW / 照片 / 视频日期选择、时区策略与后台读取进程。
 - `tests/`：文件异常、取消、重试、线程生命周期和界面交互测试。
 - `tools/capture_ui.py` / `tools/capture_states.py`：隔离测试媒体及 Qt 界面截图，不写入正式用户设置。
-- [v1.5.0 发布说明](docs/v1.5.0/RELEASE.md)。
+- [第三方组件与来源](THIRD_PARTY.md)。
 - [更新记录](CHANGELOG.md)。
 
-在本机的 v1.5.0 验证中，44 项测试执行完毕，41 项通过；3 项真实符号链接测试因 Windows 权限不足跳过。读卡器热拔插、掉电恢复及各型号 RAW 元数据仍需对应硬件验证。
+v1.5.1 的 64 项测试中，61 项通过，3 项真实符号链接测试因 Windows 权限不足跳过。包含 10 种 RAW 的真实元数据样本，以及 HEIF、Apple/DJI 字段、跨日时区、超时与取消测试。测试样本保留元数据，并非完整可解码的原片；支持列表不代表每款相机都做过实机验证。读卡器热拔插和掉电恢复尚未验证。

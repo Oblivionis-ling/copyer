@@ -1,0 +1,33 @@
+Copyer v1.5.1
+by Oblivionis-ling
+
+启动
+完整解压压缩包，运行 copyer-1.5.1.exe。保留同目录的 _internal 文件夹，里面包含界面与拍摄时间读取器。无需安装 Python、Perl 或 ExifTool。
+
+操作
+1. 选择来源与导入目标，勾选 RAW、照片或视频，重新扫描。
+2. 照片包括 JPEG、HEIC、HEIF、HIF；Apple ProRAW 与 DJI DNG 位于 RAW 分类。
+3. 按日期或逐文件选择；在日期后输入自定义后缀。
+4. 点击导入。支持取消、继续未完成项与失败重试，导入后保留源文件。
+
+日期
+RAW 和照片优先读取 EXIF / 厂商 / XMP 拍摄日期；视频优先读取拍摄字段，其次读取内容或容器创建日期。
+iPhone 带时区的拍摄日期保留拍摄地的日历日期，不随电脑时区变化。
+没有时区的视频容器日期默认按 UTC 转成本机时间。如果设备直接写入本地时间，在设置中关闭“视频容器时间按 UTC 转为本机时间”，然后重新扫描。
+没有有效日期或读取失败时使用文件修改时间。文件明细会明确标注来源；悬停日期来源可查看字段、原始值与回退原因。程序无法恢复文件中不存在的拍摄日期。
+
+RAW 格式
+Canon：CRW、CR2、CR3；Nikon：NEF、NRW；Sony：ARW、SRF、SR2。
+Fujifilm：RAF；Olympus / OM SYSTEM：ORF；Panasonic：RW2、RAW。
+Pentax：PEF；Samsung：SRW；Hasselblad：3FR、FFF；Leica：RWL。
+Sigma：X3F；Minolta：MRW；Phase One / Leaf：IIQ、MOS；Kodak：DCR、KDC、K25。
+通用 DNG：包括 DJI、Apple ProRAW 及其他以 DNG 保存的相机。
+视频：MP4、MOV、M4V。扩展名不区分大小写。影像预览目前仅支持 JPEG。
+
+验证
+64 项检查：61 项通过，3 项因 Windows 符号链接权限跳过。
+包含 10 种 RAW 元数据样本和 Apple / DJI 风格的日期字段回归测试，不代表所有设备型号都做过实机验证。
+
+第三方组件
+ExifTool 13.60 和 Windows Perl 运行时随包提供。许可和来源见 THIRD_PARTY.md 及 _internal/exiftool/exiftool_files/。
+源码：https://github.com/Oblivionis-ling/copyer

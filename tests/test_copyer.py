@@ -81,7 +81,7 @@ class CoreTests(unittest.TestCase):
         exif[306] = '2023:01:01 00:00:00'
         Image.new('RGB', (4, 4), 'white').save(path, exif=exif)
         self.assertEqual(core.get_file_date(path).isoformat(), '2024-05-06')
-        self.assertEqual(core.MediaFile.inspect(path).date_source, 'EXIF 拍摄时间')
+        self.assertEqual(core.MediaFile.inspect(path).date_source, 'EXIF 数字化时间')
 
     def test_corrupt_jpeg_falls_back_to_mtime(self):
         path = self.media('broken.jpg', b'not a jpeg')
@@ -90,10 +90,10 @@ class CoreTests(unittest.TestCase):
     def test_scan_error_is_reported_and_other_files_survive(self):
         bad, good = self.media('bad.cr3'), self.media('good.cr3')
         original = core.MediaFile.inspect
-        def inspect(path):
+        def inspect(path, reader=None):
             if path == bad:
                 raise PermissionError('denied')
-            return original(path)
+            return original(path, reader)
         with patch.object(core.MediaFile, 'inspect', side_effect=inspect):
             result = core.scan(str(self.source), core.RAW_EXTENSIONS)
         self.assertEqual([f.path for f in result.files], [good])
