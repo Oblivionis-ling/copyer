@@ -55,6 +55,11 @@ def install(archive: Path | None = None) -> None:
                 target = DESTINATION.joinpath(*parts[1:]).resolve()
                 if not target.is_relative_to(DESTINATION.resolve()):
                     raise RuntimeError("Unsafe ExifTool archive path.")
+                # Copyer reads capture dates; manuals, the interactive launcher,
+                # and the reverse-geocoding database are not used.
+                if not entry.is_dir() and (target.suffix.lower() in ('.pod', '.txt')
+                        or target.name in ('Geolocation.dat', 'exiftool(-k).exe')):
+                    continue
                 if entry.is_dir():
                     target.mkdir(parents=True, exist_ok=True)
                 else:

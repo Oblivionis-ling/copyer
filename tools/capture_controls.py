@@ -15,7 +15,7 @@ from PIL import Image
 from PySide6 import QtCore, QtWidgets
 from copyer_ui import MediaImporterWindow, SettingsDialog, MessageDialog, FileDetailsDialog
 
-output = ROOT / 'docs/v1.5.0/验收/控件与弹窗修订'
+output = ROOT / '_work' / 'ui' / 'controls'
 output.mkdir(parents=True, exist_ok=True)
 app = QtWidgets.QApplication([])
 

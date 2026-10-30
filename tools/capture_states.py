@@ -22,7 +22,7 @@ elif args.approved_size:
     sys.argv.extend(['--width', '700', '--height', '526'])
 context = runpy.run_path(str(ROOT / 'tools' / 'capture_ui.py'))
 window, app = context['window'], context['app']
-output = ROOT / 'docs' / 'v1.5.0' / '验收' / subfolder
+output = context['output'] / subfolder
 window.show()
 
 import copyer_core as core

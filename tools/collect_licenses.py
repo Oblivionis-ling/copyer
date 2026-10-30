@@ -9,7 +9,7 @@ root = Path(__file__).resolve().parents[1]
 destination = Path(sys.argv[1]) / '_internal' / 'licenses'
 destination.mkdir(parents=True, exist_ok=True)
 versions = []
-for package in ('PySide6', 'PySide6_Essentials', 'shiboken6', 'Pillow', 'PyInstaller'):
+for package in ('PySide6_Essentials', 'shiboken6', 'Pillow', 'PyInstaller'):
     try:
         installed = distribution(package)
     except PackageNotFoundError:

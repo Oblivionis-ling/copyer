@@ -76,7 +76,7 @@ if args.reference_labels:
         arrow_x = min(card.main_text.geometry().right(), card.main_text.x()+card.main_text.fontMetrics().horizontalAdvance(card.main_text.text())+round(12*window._scale))
         card.arrow.move(arrow_x, card.arrow.y())
 app.processEvents()
-output = ROOT / 'docs' / 'v1.5.0' / '验收'
+output = ROOT / '_work' / 'ui'
 capture_path = output / args.output
 capture_path.parent.mkdir(parents=True, exist_ok=True)
 window.grab().save(str(capture_path))

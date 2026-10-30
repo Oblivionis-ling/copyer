@@ -4,6 +4,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$env:PYTHONDONTWRITEBYTECODE = "1"
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location -Path $projectRoot
