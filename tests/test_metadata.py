@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
@@ -248,6 +249,54 @@ class MetadataIntegrationTests(unittest.TestCase):
         self.assertIn('无拍摄日期', media.date_source)
         path.write_bytes(b'corrupt media')
         self.assertIn('读取失败', core.MediaFile.inspect(path).date_source)
+
+    def test_batched_dates_equal_full_metadata_including_subseconds(self):
+        paths = [self.fixture(path.name) for path in sorted(FIXTURES.iterdir())
+                 if path.suffix.lower() in core.RAW_EXTENSIONS | core.PHOTO_EXTENSIONS | core.VIDEO_EXTENSIONS]
+        raw = subprocess.run(metadata.runtime_command() + ['-config', '', '-j', '-G1', '-a', '-s',
+                             '-api', 'QuickTimeUTC=0', *map(str, paths)], capture_output=True, timeout=20)
+        self.assertEqual(raw.returncode, 0)
+        full = {Path(tags['SourceFile']): tags for tags in json.loads(raw.stdout)}
+        with metadata.MetadataReader() as reader:
+            reader.prefetch(paths)
+            for path in paths:
+                with self.subTest(name=path.name):
+                    self.assertEqual(reader.read(path), metadata.choose_capture_date(full[path],
+                                     video=path.suffix.lower() in core.VIDEO_EXTENSIONS))
+            self.assertEqual(reader.sequence, 1)
+
+    def test_scan_cache_reuses_dates_and_invalidates_changed_file_and_timezone(self):
+        path = self.fixture('CanonRaw.cr3')
+        cache = {}
+        first = core.scan(str(self.root), core.RAW_EXTENSIONS, metadata_cache=cache)
+        with patch.object(metadata.MetadataReader, 'tags_many', side_effect=AssertionError('cache miss')):
+            second = core.scan(str(self.root), core.RAW_EXTENSIONS, metadata_cache=cache)
+        self.assertEqual(first.files, second.files)
+        self.write_test_tags(path, '-DateTimeOriginal=2026:11:03 12:00:00')
+        changed = core.scan(str(self.root), core.RAW_EXTENSIONS, metadata_cache=cache)
+        self.assertEqual(changed.files[0].date_text, '2026-11-03')
+        movie = self.fixture('QuickTime.mov')
+        self.write_test_tags(movie, '-QuickTime:CreateDate=2025:09:10 23:45:00')
+        utc = core.scan(str(self.root), core.VIDEO_EXTENSIONS, metadata_cache=cache)
+        local = core.scan(str(self.root), core.VIDEO_EXTENSIONS, metadata_cache=cache, quicktime_utc=False)
+        self.assertIn('UTC', utc.files[0].date_detail)
+        self.assertIn('设备原值', local.files[0].date_detail)
+
+    def test_cancelled_batch_reaps_reader(self):
+        paths = [self.fixture('CanonRaw.cr3', f'{index}.cr3') for index in range(32)]
+        cancel = Event()
+        with metadata.MetadataReader(cancel, command=[sys.executable, '-u', '-c',
+                'import time; time.sleep(60)']) as reader:
+            reader._start()
+            process = reader.process
+            timer = Timer(.15, cancel.set)
+            timer.start()
+            try:
+                with self.assertRaises(core.Cancelled):
+                    reader.prefetch(paths)
+                self.assertIsNotNone(process.poll())
+            finally:
+                timer.cancel()
 
 
 if __name__ == '__main__':

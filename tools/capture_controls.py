@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from PIL import Image
 from PySide6 import QtCore, QtWidgets
-from copyer_ui import MediaImporterWindow, SettingsDialog, MessageDialog, FileDetailsDialog
+from copyer_ui import MediaImporterWindow, MessageDialog
 
 output = ROOT / '_work' / 'ui' / 'controls'
 output.mkdir(parents=True, exist_ok=True)
@@ -63,15 +63,10 @@ with tempfile.TemporaryDirectory(prefix='copyer-controls-') as temporary:
                          ('focus-import', window.import_button)]:
         widget.setFocus(QtCore.Qt.FocusReason.TabFocusReason)
         capture(window, name)
-    dialog = SettingsDialog(window)
-    # Offscreen's synthetic screen is 400 x 400 at DPR 2; capture native sizes.
-    dialog.resize(520, 430)
-    dialog.show()
-    dialog.duplicate.setFocus(QtCore.Qt.FocusReason.TabFocusReason)
-    capture(dialog, 'settings')
-    print('Settings:', dialog.size().width(), dialog.size().height(), 'font', dialog.font().pixelSize())
-    dialog.reject()
-    dialog.deleteLater()
+    window.show_settings()
+    window.settings_page.duplicate.setFocus(QtCore.Qt.FocusReason.TabFocusReason)
+    capture(window, 'settings')
+    window.show_home()
     for name, question in [('warning', False), ('close-confirmation', True)]:
         dialog = MessageDialog(window, '任务正在进行' if question else '无法扫描',
                                '停止当前任务后关闭？已完成的文件会保留。' if question else '请选择文件夹，路径不能为空。',
@@ -81,17 +76,7 @@ with tempfile.TemporaryDirectory(prefix='copyer-controls-') as temporary:
         capture(dialog, name)
         dialog.reject()
         dialog.deleteLater()
-    dialog = FileDetailsDialog(window, '2026-10-27')
-    dialog.resize(1020, 620)
-    dialog.show()
-    dialog.table.selectRow(0)
-    dialog.table.setFocus()
-    settle(lambda: dialog.preview.pixmap() is not None and not dialog.preview.pixmap().isNull())
-    capture(dialog, 'details')
-    dialog.reject()
-    dialog.deleteLater()
     window.close()
     window.deleteLater()
     app.processEvents()
-    QtCore.QThreadPool.globalInstance().waitForDone(5000)
 print(output)

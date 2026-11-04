@@ -145,7 +145,7 @@ def runtime_command() -> list[str]:
 
 class MetadataReader:
     def __init__(self, cancel: Event | None = None, *, timeout: float = 15, quicktime_utc: bool = True,
-                 command: list[str] | None = None):
+                 command: list[str] | None = None, cache: dict | None = None):
         self.cancel = cancel or Event()
         self.timeout, self.quicktime_utc = timeout, quicktime_utc
         self.command = command
@@ -154,6 +154,13 @@ class MetadataReader:
         self.messages = Queue()
         self.sequence = 0
         self.fatal_error = ""
+        self.prefetched = {}
+        self.cache = cache if cache is not None else {}
+
+    def cache_key(self, path: Path):
+        info = path.stat()
+        return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns,
+                info.st_ctime_ns, self.quicktime_utc)
 
     def __enter__(self):
         return self
@@ -196,17 +203,22 @@ class MetadataReader:
         self.thread.start()
 
     def tags(self, path: Path) -> dict:
+        return self.tags_many([path])[0]
+
+    def tags_many(self, paths: list[Path]) -> list[dict]:
         self._start()
-        filename = str(path.resolve())
-        if "\n" in filename or "\r" in filename:
+        filenames = [str(path.resolve()) for path in paths]
+        if any("\n" in filename or "\r" in filename for filename in filenames):
             raise MetadataError("文件名含换行，无法读取元数据。")
         self.sequence += 1
         marker = f"{{ready{self.sequence}}}".encode("ascii")
         arguments = ["-j", "-G1", "-a", "-s", "-charset", "filename=UTF8", "-api", "QuickTimeUTC=0",
-            "-api", "LargeFileSupport=1", "-DateTimeOriginal", "-CreateDate", "-CreationDate", "-DateCreated",
+            "-api", "LargeFileSupport=1", "-api", "IgnoreTags=all",
+            "-SubSecTimeOriginal", "-SubSecTimeDigitized",
+            "-DateTimeOriginal", "-CreateDate", "-CreationDate", "-DateCreated",
             "-SubSecDateTimeOriginal", "-SubSecCreateDate", "-OffsetTimeOriginal", "-OffsetTimeDigitized",
             "-TrackCreateDate", "-MediaCreateDate", "-IFD0:ModifyDate", "-FileType", "-Error", "-Warning",
-            filename, f"-execute{self.sequence}"]
+            *filenames, f"-execute{self.sequence}"]
         try:
             self.process.stdin.write(("\n".join(arguments) + "\n").encode("utf-8"))
             self.process.stdin.flush()
@@ -225,13 +237,18 @@ class MetadataReader:
                 if line.strip() == marker:
                     break
                 length += len(line)
-                if length > 2 * 1024 * 1024:
+                if length > 2 * 1024 * 1024 * len(paths):
                     raise MetadataError("元数据输出过大。")
                 chunks.append(line)
             result = json.loads(b"".join(chunks).decode("utf-8-sig"))
-            if not isinstance(result, list) or len(result) != 1 or not isinstance(result[0], dict):
+            if (not isinstance(result, list) or len(result) != len(paths)
+                    or any(not isinstance(item, dict) for item in result)):
                 raise MetadataError("拍摄时间读取器返回了无效结果。")
-            return result[0]
+            # Do not rely on response order to assign one photo's date to another.
+            by_path = {os.path.normcase(os.path.normpath(item.get('SourceFile', ''))): item for item in result}
+            if set(by_path) != {os.path.normcase(filename) for filename in filenames}:
+                raise MetadataError("拍摄时间读取器返回了不匹配的文件路径。")
+            return [by_path[os.path.normcase(filename)] for filename in filenames]
         except (OSError, UnicodeError, ValueError, MetadataError) as exc:
             self.close()
             raise MetadataError(str(exc)) from exc
@@ -239,19 +256,63 @@ class MetadataReader:
     def read(self, path: Path) -> CaptureDate:
         self._check_cancel()
         try:
-            tags = self.tags(path)
-            supported_types = {ext[1:].upper() for ext in RAW_EXTENSIONS | PHOTO_EXTENSIONS | VIDEO_EXTENSIONS} | {"TIFF"}
-            detected = tags.get("File:FileType")
-            if detected and detected not in supported_types:
-                return CaptureDate(None, "文件修改时间（读取失败）", f"扩展名与文件内容不符：读取器识别为 {detected}。")
-            return choose_capture_date(tags, video=path.suffix.lower() in VIDEO_EXTENSIONS,
-                                       quicktime_utc=self.quicktime_utc)
+            key = self.cache_key(path)
+        except OSError:
+            key = None
+        existing = self.cache.get(path)
+        if existing is not None and existing[0] == key:
+            return existing[1]
+        cached = self.prefetched.pop(path, None)
+        if cached is not None:
+            if cached[0] == key:
+                return self.remember(path, key, cached[1])
+        try:
+            return self.remember(path, key, self.capture_tags(path, self.tags(path)))
         except MetadataError as exc:
             if path.suffix.lower() in JPEG_EXTENSIONS:
                 fallback = read_jpeg_date(path)
                 if fallback.value:
                     return fallback
             return CaptureDate(None, "文件修改时间（读取失败）", str(exc))
+
+    def remember(self, path, key, value):
+        if key is not None and '读取失败' not in value.source:
+            if len(self.cache) >= 20000:
+                self.cache.pop(next(iter(self.cache)))
+            self.cache[path] = (key, value)
+        return value
+
+    def capture_tags(self, path: Path, tags: dict) -> CaptureDate:
+        supported_types = {ext[1:].upper() for ext in RAW_EXTENSIONS | PHOTO_EXTENSIONS | VIDEO_EXTENSIONS} | {"TIFF"}
+        detected = tags.get("File:FileType")
+        if detected and detected not in supported_types:
+            return CaptureDate(None, "文件修改时间（读取失败）", f"扩展名与文件内容不符：读取器识别为 {detected}。")
+        return choose_capture_date(tags, video=path.suffix.lower() in VIDEO_EXTENSIONS,
+                                   quicktime_utc=self.quicktime_utc)
+
+    def prefetch(self, paths: list[Path]) -> None:
+        """Bounded batch, cached only until the following MediaFile inspections."""
+        self.prefetched.clear()
+        snapshots = {}
+        for path in paths:
+            self._check_cancel()
+            try:
+                key = self.cache_key(path)
+                existing = self.cache.get(path)
+                if existing is None or existing[0] != key:
+                    snapshots[path] = key
+            except OSError:
+                continue
+        if not snapshots:
+            return
+        try:
+            values = self.tags_many(list(snapshots))
+        except MetadataError:
+            # Unusual filenames or a damaged batch keep the established per-file
+            # fallback and diagnostics; cancellation still propagates immediately.
+            return
+        for path, tags in zip(snapshots, values):
+            self.prefetched[path] = (snapshots[path], self.capture_tags(path, tags))
 
     def close(self):
         process, thread = self.process, self.thread

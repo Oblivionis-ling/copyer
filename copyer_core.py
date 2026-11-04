@@ -10,6 +10,7 @@ import tempfile
 import time
 from collections import defaultdict
 from collections.abc import Callable, Iterable
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
@@ -127,7 +128,7 @@ class ScanResult:
 
 def scan(source_text: str, extensions: Iterable[str], cancel: Event | None = None,
          progress: Callable[[int, str, dict[str, int]], None] | None = None,
-         *, quicktime_utc: bool = True) -> ScanResult:
+         *, quicktime_utc: bool = True, metadata_cache: dict | None = None) -> ScanResult:
     cancel = cancel or Event()
     source = directory_path(source_text, must_exist=True)
     allowed = {ext.lower() for ext in extensions}
@@ -138,7 +139,26 @@ def scan(source_text: str, extensions: Iterable[str], cancel: Event | None = Non
     pending = [source]
     found = 0
     last_update = 0.0
-    reader = MetadataReader(cancel, quicktime_utc=quicktime_utc)
+    reader = MetadataReader(cancel, quicktime_utc=quicktime_utc, cache=metadata_cache)
+    batch: list[Path] = []
+
+    def inspect_batch():
+        nonlocal found, last_update
+        reader.prefetch(batch)
+        for path in batch:
+            check_cancel(cancel)
+            try:
+                media = MediaFile.inspect(path, reader)
+                groups[media.date_text].append(media)
+                found += 1
+            except (OSError, ValueError) as exc:
+                result.issues.append(FileIssue(path, str(exc)))
+            now = time.monotonic()
+            if progress and now - last_update >= 0.1:
+                progress(found, str(path.parent), {key: len(value) for key, value in groups.items()})
+                last_update = now
+        batch.clear()
+
     try:
         while pending:
             check_cancel(cancel)
@@ -154,9 +174,9 @@ def scan(source_text: str, extensions: Iterable[str], cancel: Event | None = Non
                             elif entry.is_dir(follow_symlinks=False):
                                 pending.append(path)
                             elif path.suffix.lower() in allowed and entry.is_file(follow_symlinks=False):
-                                media = MediaFile.inspect(path, reader)
-                                groups[media.date_text].append(media)
-                                found += 1
+                                batch.append(path)
+                                if len(batch) >= 32:
+                                    inspect_batch()
                             now = time.monotonic()
                             if progress and now - last_update >= 0.1:
                                 progress(found, str(current), {key: len(value) for key, value in groups.items()})
@@ -165,6 +185,8 @@ def scan(source_text: str, extensions: Iterable[str], cancel: Event | None = Non
                             result.issues.append(FileIssue(path, str(exc)))
             except OSError as exc:
                 result.issues.append(FileIssue(current, str(exc)))
+        if batch:
+            inspect_batch()
     except Cancelled:
         result.cancelled = True
     finally:
@@ -215,6 +237,7 @@ class FileResult:
     status: str
     destination: Path | None = None
     error: str = ""
+    verified_sha256: str = ""
 
 
 @dataclass(frozen=True)
@@ -355,7 +378,7 @@ def run_import(job: ImportJob, cancel: Event | None = None,
                     unchanged = (candidate_before.st_dev, candidate_before.st_ino, candidate_before.st_size, candidate_before.st_mtime_ns) == (candidate_after.st_dev, candidate_after.st_ino, candidate_after.st_size, candidate_after.st_mtime_ns)
                     if same_content and unchanged:
                         _assert_source(media, job.source)
-                        result.files.append(FileResult(item, "skipped", candidate))
+                        result.files.append(FileResult(item, "skipped", candidate, verified_sha256=source_digest))
                         completed += 1
                         done += work * 2
                         emit("compare", media.path, force=True)
@@ -413,7 +436,7 @@ def run_import(job: ImportJob, cancel: Event | None = None,
                         break
                     except FileExistsError:
                         candidate = ensure_unique_path(directory, media.path.name)
-                result.files.append(FileResult(item, "copied", candidate))
+                result.files.append(FileResult(item, "copied", candidate, verified_sha256=source_hash.hexdigest()))
                 completed += 1
                 done += work * 2
                 emit("verified", media.path, force=True)
@@ -435,4 +458,134 @@ def run_import(job: ImportJob, cancel: Event | None = None,
                             result.files[result_index] = FileResult(item, previous.status, previous.destination,
                                 f"{previous.error}；临时文件未能移除：{temporary}（{exc}）")
                             break
+    return result
+
+
+@dataclass
+class CleanupResult:
+    deleted: list[Path] = field(default_factory=list)
+    issues: list[FileIssue] = field(default_factory=list)
+    cancelled: bool = False
+
+
+def cleanup_candidates(files: Iterable[FileResult]) -> tuple[FileResult, ...]:
+    return tuple(entry for entry in files if entry.status in {"copied", "skipped"}
+                 and entry.destination is not None and entry.verified_sha256)
+
+
+def _plain_path(path: Path, root: Path) -> None:
+    """Reject replaced roots, directory junctions and file links before opening."""
+    if not path.is_relative_to(root) or path == root:
+        raise ValueError("文件不在本次任务目录内。")
+    for part in (path, *path.parents):
+        if is_link(part):
+            raise ValueError("文件路径包含链接或重解析点，已保留来源。")
+    if path.resolve() != path or root.resolve() != root:
+        raise ValueError("文件路径已变化，已保留来源。")
+
+
+@contextmanager
+def _protected_reader(path: Path, *, delete_access: bool = False):
+    """On Windows hold the exact file against writes/renames through deletion."""
+    if os.name != "nt":
+        with path.open("rb") as stream:
+            yield stream
+        return
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                       wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
+    create.restype = wintypes.HANDLE
+    handle = create(str(path), 0x80000000 | (0x10000 if delete_access else 0),
+                    1, None, 3, 0x00200000, None)
+    if handle == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+    except BaseException:
+        kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel.CloseHandle(handle)
+        raise
+    with os.fdopen(descriptor, "rb") as stream:
+        yield stream
+
+
+def _delete_open_source(stream, path: Path) -> None:
+    if os.name != "nt":
+        if identity(path) != (os.fstat(stream.fileno()).st_dev, os.fstat(stream.fileno()).st_ino):
+            raise ValueError("源文件已被替换。")
+        path.unlink()
+        return
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    dispose = kernel.SetFileInformationByHandle
+    dispose.argtypes = (wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD)
+    dispose.restype = wintypes.BOOL
+    # FILE_DISPOSITION_INFO.DeleteFile is a one-byte BOOLEAN.
+    flag = ctypes.c_ubyte(1)
+    if not dispose(msvcrt.get_osfhandle(stream.fileno()), 4, ctypes.byref(flag), ctypes.sizeof(flag)):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+
+def run_cleanup(job: ImportJob, files: Iterable[FileResult], cancel: Event | None = None,
+                progress: Callable[[Progress], None] | None = None) -> CleanupResult:
+    """Delete only receipts from this job after re-reading both protected files."""
+    cancel = cancel or Event()
+    result = CleanupResult()
+    candidates = cleanup_candidates(files)
+    allowed_items = set(job.items)
+    total = sum(max(entry.item.media.size, 1) * 2 for entry in candidates)
+    done = 0
+    started = time.monotonic()
+    for entry in candidates:
+        media, destination = entry.item.media, entry.destination
+        try:
+            check_cancel(cancel)
+            if entry.item not in allowed_items or identity(job.source) != job.source_identity:
+                raise ValueError("来源设备或任务已变化，已保留来源。")
+            validate_roots(job.source, job.target)
+            _plain_path(media.path, job.source)
+            _plain_path(destination, job.target)
+            _assert_source(media, job.source)
+            with _protected_reader(destination) as target, _protected_reader(media.path, delete_access=True) as source:
+                source_info, target_info = os.fstat(source.fileno()), os.fstat(target.fileno())
+                if (not media.matches(source_info) or not stat.S_ISREG(target_info.st_mode)
+                        or target_info.st_size != media.size):
+                    raise ValueError("源文件或目标文件已变化，已保留来源。")
+                if (source_info.st_dev, source_info.st_ino) == (target_info.st_dev, target_info.st_ino):
+                    raise ValueError("目标与来源是同一文件，已保留来源。")
+                for stream in (source, target):
+                    digest = hashlib.sha256()
+                    read = 0
+                    while True:
+                        check_cancel(cancel)
+                        block = stream.read(CHUNK_SIZE)
+                        if not block:
+                            break
+                        digest.update(block)
+                        read += len(block)
+                        if progress:
+                            progress(Progress("cleanup_verify", str(media.path), done + read, total,
+                                              len(result.deleted), len(candidates), time.monotonic()-started))
+                    if read != media.size or digest.hexdigest() != entry.verified_sha256:
+                        raise ValueError("内容与导入时的校验记录不一致，已保留来源。")
+                    done += max(read, 1)
+                check_cancel(cancel)
+                _plain_path(media.path, job.source)
+                _plain_path(destination, job.target)
+                _assert_source(media, job.source)
+                if identity(destination) != (target_info.st_dev, target_info.st_ino):
+                    raise ValueError("目标文件已被替换，已保留来源。")
+                _delete_open_source(source, media.path)
+            result.deleted.append(media.path)
+        except Cancelled:
+            result.cancelled = True
+            break
+        except (OSError, ValueError) as exc:
+            result.issues.append(FileIssue(media.path, str(exc)))
     return result

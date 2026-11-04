@@ -6,12 +6,14 @@ import os
 import sys
 import time
 from collections import Counter
+from dataclasses import replace
 from pathlib import Path
 from threading import Event
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
 import copyer_core as core
+import copyer_update as updater
 from copyer_version import APP_AUTHOR, APP_VERSION
 from copyer_materials import PaperGlassCanvas, paint_control_glass
 from copyer_icons import ui_icon
@@ -351,8 +353,6 @@ class PathCard(QtWidgets.QWidget):
         self.surface = GlassSurface(self)
         self.path_icon = QtWidgets.QLabel(self.surface)
         self.main_text = ElidedLabel("选择来源" if source else "选择目标", self.surface)
-        self.secondary = ElidedLabel("", self.surface)
-        self.secondary.setStyleSheet("color:#717171")
         self.arrow = QtWidgets.QToolButton(self.surface)
         self.arrow.setIcon(ui_icon("chevron-down"))
         self.arrow.setAccessibleName("选择来源设备")
@@ -367,82 +367,48 @@ class PathCard(QtWidgets.QWidget):
         self.separator.setStyleSheet("background:#d5d5d5")
         self.path = ""
         self.scale = 1.0
-        self.compact = False
         self.choose_button.setToolTip(self.choose_button.accessibleName())
 
     def set_path(self, value: str):
         self.path = value
         self.main_text.setText(source_name(value) if self.source else (value or "选择目标"))
-        self.secondary.setText(value if self.source else "")
         self.relayout(self.scale)
 
-    def relayout(self, scale: float, compact: bool | None = None):
-        if compact is not None:
-            self.compact = compact
+    def relayout(self, scale: float):
         self.scale = scale
-        s = scale
-        self.surface.scale = s
-        self.choose_button.setText("" if self.compact else "选择文件夹")
-        self.choose_button.setStyleSheet("padding:0;" if self.compact else "")
-        self.arrow.setStyleSheet("padding:0;" if self.compact else "")
-        self.secondary.setVisible(self.source and not self.compact)
+        self.surface.scale = scale
+        self.choose_button.setText("")
+        self.choose_button.setStyleSheet("padding:0;")
+        self.arrow.setStyleSheet("padding:0;")
         if self.path:
-            self.main_text.setText(source_name(self.path) if self.source else ((Path(self.path).name or self.path) if self.compact else self.path))
+            self.main_text.setText(source_name(self.path) if self.source else (Path(self.path).name or self.path))
             self.main_text.setToolTip(self.path)
             self.main_text.setAccessibleDescription(self.path)
         shadow = self.surface.graphicsEffect()
-        shadow.setBlurRadius(11 if self.compact else 24)
-        shadow.setOffset(0, 3 if self.compact else 6)
-        if self.compact:
-            caption_height = 13
-            body_height = self.height()-caption_height-5
-            self.caption.setGeometry(8, 0, self.width()-16, caption_height)
-            font(self.caption, 11)
-            self.surface.setGeometry(0, caption_height, self.width(), body_height)
-            w, h = self.surface.width(), self.surface.height()
-            self.path_icon.setGeometry(8, (h-22)//2, 22, 22)
-            self.path_icon.setPixmap(ui_icon("sd" if self.source else "folder-outline").pixmap(22, 22))
-            self.choose_button.setGeometry(w-34, 3, 29, h-6)
-            self.choose_button.setIconSize(QtCore.QSize(21, 21))
-            self.separator.setGeometry(w-39, 8, 1, max(8, h-16))
-            self.main_text.setGeometry(34, 2, max(10, w-78-(21 if self.source else 0)), h-4)
-            font(self.main_text, 12, medium=True)
-            if self.source:
-                self.arrow.setGeometry(w-62, 3, 21, h-6)
-                self.arrow.setIconSize(QtCore.QSize(15, 15))
-            self.surface.update()
-            return
-        self.caption.setGeometry(round(14*s), 0, self.width()-30, round(28*s))
-        font(self.caption, 23*s)
-        self.surface.setGeometry(0, round(28*s), self.width(), round(116*s))
-        w = self.surface.width()
-        self.path_icon.setGeometry(round(30*s), round(26*s), round(52*s), round(62*s))
-        self.path_icon.setPixmap(ui_icon("sd" if self.source else "folder-outline").pixmap(round(52*s), round(52*s)))
-        action_width = round(234*s)
-        self.separator.setGeometry(w-action_width-round(24*s), round(31*s), 1, round(54*s))
-        self.choose_button.setGeometry(w-action_width-round(12*s), round(23*s), action_width, round(70*s))
-        font(self.choose_button, 26*s, medium=True)
-        self.choose_button.setIconSize(QtCore.QSize(round(48*s), round(48*s)))
-        text_x = round(104*s)
-        text_width = max(20, self.separator.x()-text_x-round(22*s))
+        shadow.setBlurRadius(11)
+        shadow.setOffset(0, 3)
+        caption_height = 13
+        body_height = self.height()-caption_height-5
+        self.caption.setGeometry(8, 0, self.width()-16, caption_height)
+        font(self.caption, 11)
+        self.surface.setGeometry(0, caption_height, self.width(), body_height)
+        w, h = self.surface.width(), self.surface.height()
+        self.path_icon.setGeometry(8, (h-22)//2, 22, 22)
+        self.path_icon.setPixmap(ui_icon("sd" if self.source else "folder-outline").pixmap(22, 22))
+        self.choose_button.setGeometry(w-34, 3, 29, h-6)
+        self.choose_button.setIconSize(QtCore.QSize(21, 21))
+        self.separator.setGeometry(w-39, 8, 1, max(8, h-16))
+        self.main_text.setGeometry(34, 2, max(10, w-78-(21 if self.source else 0)), h-4)
+        font(self.main_text, 12, medium=True)
         if self.source:
-            self.main_text.setGeometry(text_x, round(23*s), max(20, text_width-round(35*s)), round(37*s))
-            font(self.main_text, 26*s, medium=True)
-            arrow_x = min(text_x+text_width-round(35*s), text_x+self.main_text.fontMetrics().horizontalAdvance(self.main_text.text())+round(12*s))
-            self.arrow.setGeometry(arrow_x, round(23*s), round(35*s), round(37*s))
-            self.arrow.setIconSize(QtCore.QSize(round(25*s), round(25*s)))
-            self.secondary.setGeometry(text_x, round(62*s), text_width, round(28*s))
-            font(self.secondary, 22*s)
-        else:
-            self.main_text.setGeometry(text_x, round(32*s), text_width, round(51*s))
-        font(self.main_text, 26*s, medium=True)
+            self.arrow.setGeometry(w-62, 3, 21, h-6)
+            self.arrow.setIconSize(QtCore.QSize(15, 15))
         self.surface.update()
 
 
 class GroupRow(QtWidgets.QWidget):
     selection_changed = QtCore.Signal(str, bool)
     suffix_changed = QtCore.Signal(str, str)
-    detail_requested = QtCore.Signal(str)
 
     def __init__(self, day: str, files: list[core.MediaFile], parent=None):
         super().__init__(parent)
@@ -455,55 +421,29 @@ class GroupRow(QtWidgets.QWidget):
         self.suffix = QtWidgets.QLineEdit(self)
         self.suffix.setPlaceholderText("添加后缀")
         self.suffix.setAccessibleName(f"{day} 的自定义后缀，可选")
+        self.suffix.setStyleSheet("QLineEdit { padding:0px 3px 2px; }")
         self.suffix.setMaxLength(120)
         self.suffix.textChanged.connect(lambda value: self.suffix_changed.emit(self.day, value))
         self.count = QtWidgets.QLabel(str(len(files)), self)
         self.count.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.warning = QtWidgets.QLabel(self)
         self.warning.hide()
-        self.detail = QtWidgets.QToolButton(self)
-        self.detail.setIcon(ui_icon("chevron-right"))
-        self.detail.setAccessibleName(f"查看 {day} 文件明细")
-        self.detail.setToolTip("查看文件明细")
-        self.detail.clicked.connect(lambda: self.detail_requested.emit(self.day))
         self.scale = 1.0
-        self.compact = False
 
-    def relayout(self, scale: float, compact: bool | None = None):
-        if compact is not None and compact != self.compact:
-            self.compact = compact
-            self.suffix.setStyleSheet("QLineEdit { padding:0px 3px 2px; }" if compact else "")
-            self.detail.setStyleSheet("padding:0;" if compact else "")
+    def relayout(self, scale: float):
         self.scale = s = scale
-        if self.compact:
-            height = round(48*s)
-            self.setFixedHeight(height)
-            self.check.scale = s
-            self.check.setGeometry(1, 0, 25, height)
-            field_x = 118 if self.width() >= 310 else 101
-            self.date_label.setGeometry(30, 0, field_x-34, height)
-            self.suffix.setGeometry(field_x, 0, max(25, self.width()-field_x-99), height-1)
-            self.count.setGeometry(self.width()-69, 0, 38, height)
-            self.warning.setGeometry(self.width()-90, (height-14)//2, 14, 14)
-            self.warning.setPixmap(ui_icon("alert-outline").pixmap(14, 14))
-            self.detail.setGeometry(self.width()-26, 0, 24, height)
-            self.detail.setIconSize(QtCore.QSize(17, 17))
-            for widget in (self.date_label, self.suffix, self.count):
-                font(widget, 22*s, medium=True)
-            self.update()
-            return
-        self.setFixedHeight(round(98*s))
+        height = round(48*s)
+        self.setFixedHeight(height)
         self.check.scale = s
-        self.check.setGeometry(round(12*s), round(20*s), round(44*s), round(56*s))
-        self.date_label.setGeometry(round(99*s), round(22*s), round(285*s), round(54*s))
-        self.suffix.setGeometry(round(460*s), round(14*s), max(110, self.width()-round(752*s)), round(62*s))
-        self.count.setGeometry(self.width()-round(256*s), round(22*s), round(100*s), round(54*s))
-        self.warning.setGeometry(self.width()-round(164*s), round(34*s), round(28*s), round(28*s))
-        self.warning.setPixmap(ui_icon("alert-outline").pixmap(round(28*s), round(28*s)))
-        self.detail.setGeometry(self.width()-round(58*s), round(22*s), round(44*s), round(54*s))
-        self.detail.setIconSize(QtCore.QSize(round(28*s), round(28*s)))
+        self.check.setGeometry(1, 0, 25, height)
+        field_x = 118 if self.width() >= 310 else 101
+        self.date_label.setGeometry(30, 0, field_x-34, height)
+        self.suffix.setGeometry(field_x, 0, max(25, self.width()-field_x-92), height-1)
+        self.count.setGeometry(self.width()-64, 0, 64, height)
+        self.warning.setGeometry(self.width()-86, (height-14)//2, 14, 14)
+        self.warning.setPixmap(ui_icon("alert-outline").pixmap(14, 14))
         for widget in (self.date_label, self.suffix, self.count):
-            font(widget, 26*s, medium=True)
+            font(widget, 22*s, medium=True)
         self.update()
 
     def resizeEvent(self, event):
@@ -532,115 +472,12 @@ class TaskWorker(QtCore.QThread):
             self.error.emit(str(exc))
 
 
-class PreviewSignals(QtCore.QObject):
-    ready = QtCore.Signal(str, QtGui.QImage)
-
-
-class PreviewTask(QtCore.QRunnable):
-    def __init__(self, path: Path):
-        super().__init__()
-        self.path = path
-        self.signals = PreviewSignals()
-
-    def run(self):
-        reader = QtGui.QImageReader(str(self.path))
-        reader.setAutoTransform(True)
-        size = reader.size()
-        if size.isValid():
-            reader.setScaledSize(size.scaled(720, 540, QtCore.Qt.AspectRatioMode.KeepAspectRatio))
-        self.signals.ready.emit(str(self.path), reader.read())
-
-
-class FileTableModel(QtCore.QAbstractTableModel):
-    selection_changed = QtCore.Signal()
-
-    def __init__(self, files, selected, editable, parent=None):
-        super().__init__(parent)
-        self.files, self.selected, self.editable = files, selected, editable
-
-    def rowCount(self, parent=QtCore.QModelIndex()):
-        return 0 if parent.isValid() else len(self.files)
-
-    def columnCount(self, parent=QtCore.QModelIndex()):
-        return 4
-
-    def headerData(self, section, orientation, role=QtCore.Qt.ItemDataRole.DisplayRole):
-        if orientation == QtCore.Qt.Orientation.Horizontal and role == QtCore.Qt.ItemDataRole.DisplayRole:
-            return ("", "文件", "大小", "日期来源")[section]
-        return None
-
-    def data(self, index, role=QtCore.Qt.ItemDataRole.DisplayRole):
-        if not index.isValid():
-            return None
-        media = self.files[index.row()]
-        if role == QtCore.Qt.ItemDataRole.CheckStateRole and index.column() == 0:
-            return QtCore.Qt.CheckState.Checked if media.path in self.selected else QtCore.Qt.CheckState.Unchecked
-        if role == QtCore.Qt.ItemDataRole.DisplayRole:
-            return ("", media.path.name, format_bytes(media.size), media.date_source)[index.column()]
-        if role == QtCore.Qt.ItemDataRole.ToolTipRole:
-            return media.date_detail if index.column() == 3 else str(media.path)
-        return None
-
-    def flags(self, index):
-        flags = QtCore.Qt.ItemFlag.ItemIsEnabled | QtCore.Qt.ItemFlag.ItemIsSelectable
-        if index.column() == 0 and self.editable:
-            flags |= QtCore.Qt.ItemFlag.ItemIsUserCheckable
-        return flags
-
-    def setData(self, index, value, role=QtCore.Qt.ItemDataRole.EditRole):
-        if index.column() != 0 or not self.editable or role != QtCore.Qt.ItemDataRole.CheckStateRole:
-            return False
-        path = self.files[index.row()].path
-        if value == QtCore.Qt.CheckState.Checked or value == QtCore.Qt.CheckState.Checked.value:
-            self.selected.add(path)
-        else:
-            self.selected.discard(path)
-        self.dataChanged.emit(index, index, [role])
-        self.selection_changed.emit()
-        return True
-
-
 class SelectionDelegate(QtWidgets.QStyledItemDelegate):
     """Keep the row's gray selection fill without a native dotted focus frame."""
     def paint(self, painter, option, index):
         styled = QtWidgets.QStyleOptionViewItem(option)
         styled.state &= ~QtWidgets.QStyle.StateFlag.State_HasFocus
         super().paint(painter, styled, index)
-
-
-class FileCheckDelegate(SelectionDelegate):
-    """Use the same legible square checkmark in native item views."""
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.check_icon = ui_icon("check", "#ffffff")
-
-    def paint(self, painter, option, index):
-        styled = QtWidgets.QStyleOptionViewItem(option)
-        self.initStyleOption(styled, index)
-        styled.state &= ~QtWidgets.QStyle.StateFlag.State_HasFocus
-        styled.features &= ~QtWidgets.QStyleOptionViewItem.ViewItemFeature.HasCheckIndicator
-        self.parent().style().drawControl(QtWidgets.QStyle.ControlElement.CE_ItemViewItem, styled, painter, self.parent())
-        rect = QtCore.QRectF(option.rect.center().x()-8, option.rect.center().y()-8, 16, 16)
-        checked = index.data(QtCore.Qt.ItemDataRole.CheckStateRole) == QtCore.Qt.CheckState.Checked
-        painter.save()
-        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
-        painter.setPen(QtGui.QPen(QtGui.QColor("#181818" if checked else "#aaaaaa"), 1))
-        painter.setBrush(QtGui.QColor("#181818") if checked else QtCore.Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(rect, 1, 1)
-        if checked:
-            self.check_icon.paint(painter, rect.adjusted(1, 1, -1, -1).toRect())
-        painter.restore()
-
-    def editorEvent(self, event, model, option, index):
-        if not (model.flags(index) & QtCore.Qt.ItemFlag.ItemIsUserCheckable):
-            return False
-        mouse = event.type() == QtCore.QEvent.Type.MouseButtonRelease and event.button() == QtCore.Qt.MouseButton.LeftButton
-        key = event.type() == QtCore.QEvent.Type.KeyPress and event.key() in (QtCore.Qt.Key.Key_Space, QtCore.Qt.Key.Key_Select)
-        if mouse or key:
-            checked = index.data(QtCore.Qt.ItemDataRole.CheckStateRole) == QtCore.Qt.CheckState.Checked
-            return model.setData(index, QtCore.Qt.CheckState.Unchecked if checked else QtCore.Qt.CheckState.Checked,
-                                 QtCore.Qt.ItemDataRole.CheckStateRole)
-        return False
 
 
 class ThemedDialog(QtWidgets.QDialog):
@@ -744,115 +581,241 @@ class MessageDialog(ThemedDialog):
                          default_accept=not question)
 
 
-class SettingsDialog(ThemedDialog):
+class SettingsPage(QtWidgets.QWidget):
+    """Settings stay inside the main window and persist when changed."""
     def __init__(self, owner):
-        super().__init__(owner, "设置", (520, 530))
-        layout = self.content_layout
-        layout.addWidget(QtWidgets.QLabel("同名文件：自动重命名"))
+        super().__init__(owner.canvas)
+        self.owner = owner
+        font(self, 13)
+        self.setStyleSheet("QLabel, QPushButton, QCheckBox { font-size:13px; } "
+                          "QLabel#settingsHeading { font-size:14px; }")
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(8, 0, 8, 6)
+        outer.setSpacing(12)
+        header = QtWidgets.QHBoxLayout()
+        self.back_button = QtWidgets.QPushButton("← 返回")
+        self.back_button.setAccessibleName("返回主页面")
+        self.back_button.setMinimumSize(70, 32)
+        self.back_button.clicked.connect(owner.show_home)
+        header.addWidget(self.back_button)
+        heading = QtWidgets.QLabel("设置")
+        heading.setObjectName("settingsHeading")
+        font(heading, 14, medium=True)
+        header.addWidget(heading)
+        header.addStretch()
+        outer.addLayout(header)
+        self.scroll = QtWidgets.QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background:transparent; }")
+        self.scroll.viewport().setAutoFillBackground(False)
+        content = QtWidgets.QWidget()
+        content.setAutoFillBackground(False)
+        columns = QtWidgets.QHBoxLayout(content)
+        columns.setContentsMargins(0, 0, 0, 0)
+        self.form = QtWidgets.QWidget()
+        self.form.setMaximumWidth(660)
+        layout = QtWidgets.QVBoxLayout(self.form)
+        layout.setContentsMargins(0, 0, 8, 12)
+        layout.setSpacing(12)
+        def section(title):
+            label = QtWidgets.QLabel(title)
+            font(label, 13, medium=True)
+            layout.addWidget(label)
+        section("导入")
+        layout.addWidget(QtWidgets.QLabel("同名文件自动重命名，已有文件不会被覆盖。"))
         self.duplicate = SmallCheckBox("跳过内容完全相同的文件")
-        self.duplicate.scale = .72
-        self.duplicate.setChecked(owner.skip_identical)
+        self.video_time = SmallCheckBox("视频容器时间按 UTC 转为本机时间")
+        self.video_time.setToolTip("仅影响未标注时区的视频容器日期。设备若直接写入本地时间，请关闭；带时区的拍摄字段始终优先。")
         layout.addWidget(self.duplicate)
+        layout.addWidget(self.video_time)
+        section("显示")
+        appearance = QtWidgets.QHBoxLayout()
+        self.transparency = SmallCheckBox("减少透明度")
+        self.motion = SmallCheckBox("减少动态效果")
+        appearance.addWidget(self.transparency)
+        appearance.addWidget(self.motion)
+        appearance.addStretch()
+        layout.addLayout(appearance)
+        section("版本")
+        update_row = QtWidgets.QHBoxLayout()
+        update_row.addWidget(QtWidgets.QLabel(f"当前版本  v{APP_VERSION}"))
+        update_row.addStretch()
+        self.update_button = QtWidgets.QPushButton("检查更新")
+        self.update_button.setMinimumHeight(34)
+        self.update_button.clicked.connect(self.check_updates)
+        update_row.addWidget(self.update_button)
+        layout.addLayout(update_row)
+        section("支持格式")
         formats = QtWidgets.QGridLayout()
         formats.setHorizontalSpacing(12)
-        formats.setVerticalSpacing(6)
-        for row, (name, extensions) in enumerate((("RAW", " ".join(sorted(core.RAW_EXTENSIONS))),
-                                                  ("照片", " ".join(sorted(core.PHOTO_EXTENSIONS))),
-                                                  ("视频", " ".join(sorted(core.VIDEO_EXTENSIONS))))):
+        formats.setVerticalSpacing(8)
+        for row, (name, extensions) in enumerate((("RAW", core.RAW_EXTENSIONS),
+                                                  ("照片", core.PHOTO_EXTENSIONS),
+                                                  ("视频", core.VIDEO_EXTENSIONS))):
             label = QtWidgets.QLabel(name)
             label.setStyleSheet("color:#666666")
-            values = QtWidgets.QLabel(extensions)
+            values = QtWidgets.QLabel(" ".join(sorted(extensions)))
             values.setWordWrap(True)
             values.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
             formats.addWidget(label, row, 0, alignment=QtCore.Qt.AlignmentFlag.AlignTop)
             formats.addWidget(values, row, 1)
         formats.setColumnStretch(1, 1)
         layout.addLayout(formats)
-        date_help = QtWidgets.QLabel("日期：优先使用拍摄时间，其次为内容创建时间；缺失时使用修改时间。明细中可查看来源。")
+        date_help = QtWidgets.QLabel("日期优先使用拍摄时间，其次为内容创建时间；缺失时使用修改时间。")
         date_help.setStyleSheet("color:#666666")
         date_help.setWordWrap(True)
         layout.addWidget(date_help)
-        self.video_time = SmallCheckBox("视频容器时间按 UTC 转为本机时间")
-        self.video_time.scale = .72
-        self.video_time.setChecked(owner.video_time_utc)
-        self.video_time.setToolTip("仅影响未标注时区的视频容器日期。设备若直接写入本地时间，请关闭；带时区的拍摄字段始终优先。")
-        layout.addWidget(self.video_time)
-        layout.addSpacing(4)
-        appearance = QtWidgets.QHBoxLayout()
-        appearance.setSpacing(24)
-        self.transparency = SmallCheckBox("减少透明度")
-        self.motion = SmallCheckBox("减少动态效果")
-        for box, checked in ((self.transparency, owner.reduce_transparency), (self.motion, owner.reduce_motion)):
+        layout.addStretch()
+        columns.addWidget(self.form, 1)
+        columns.addStretch()
+        self.scroll.setWidget(content)
+        outer.addWidget(self.scroll, 1)
+        self.load_preferences()
+        for box in (self.duplicate, self.video_time, self.transparency, self.motion):
             box.scale = .72
-            box.setChecked(checked)
-            appearance.addWidget(box)
-        appearance.addStretch()
-        layout.addLayout(appearance)
-        self.add_actions("确定", "取消")
+            font(box, 13)
+            box.toggled.connect(owner.apply_settings)
+
+    def load_preferences(self):
+        for box, value in ((self.duplicate, self.owner.skip_identical),
+                           (self.video_time, self.owner.video_time_utc),
+                           (self.transparency, self.owner.reduce_transparency),
+                           (self.motion, self.owner.reduce_motion)):
+            with QtCore.QSignalBlocker(box):
+                box.setChecked(value)
+
+    def check_updates(self):
+        dialog = UpdateDialog(self.owner)
+        dialog.exec()
+        dialog.deleteLater()
 
 
-class FileDetailsDialog(ThemedDialog):
-    def __init__(self, owner, day):
-        super().__init__(owner, f"{day} · 文件明细", (1020, 620))
-        self.owner, self.day = owner, day
-        self.setSizeGripEnabled(True)
-        layout = self.content_layout
-        destination = core.build_destination_folder_name(day, owner.suffixes.get(day, ""))
-        path_label = QtWidgets.QLabel(str(Path(owner.target) / destination) if owner.target else destination)
-        path_label.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
-        path_label.setWordWrap(True)
-        layout.addWidget(path_label)
-        split = QtWidgets.QSplitter()
-        self.table = QtWidgets.QTableView()
-        font(self.table, 16)
-        font(self.table.horizontalHeader(), 16, medium=True)
-        self.model = FileTableModel(owner.scan_result.groups[day], owner.selected, owner.phase == "ready", self)
-        self.model.selection_changed.connect(owner.refresh_selection)
-        self.table.setModel(self.model)
-        self.table.setItemDelegate(SelectionDelegate(self.table))
-        self.table.setItemDelegateForColumn(0, FileCheckDelegate(self.table))
-        self.table.verticalHeader().setDefaultSectionSize(34)
-        self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
-        self.table.verticalHeader().hide()
-        self.table.setColumnWidth(0, 40)
-        self.table.setColumnWidth(2, 90)
-        self.table.setColumnWidth(3, 140)
-        self.table.horizontalHeader().setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.Stretch)
-        self.table.selectionModel().currentRowChanged.connect(self.show_preview)
-        split.addWidget(self.table)
-        self.preview = QtWidgets.QLabel("选择 JPEG 查看预览")
-        self.preview.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self.preview.setMinimumWidth(260)
-        self.preview.setWordWrap(True)
-        split.addWidget(self.preview)
-        split.setSizes([650, 310])
-        layout.addWidget(split, 1)
-        self.add_actions("关闭")
-        self._preview_path = ""
+class UpdateDialog(ThemedDialog):
+    def __init__(self, owner):
+        super().__init__(owner, "检查更新", (470, 250))
+        self.worker = None
+        self.cancel = Event()
+        self.release = None
+        self.prepared = None
+        self.close_when_finished = False
+        self.label = QtWidgets.QLabel("正在连接 GitHub，检查最新版本…")
+        self.label.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        self.label.setWordWrap(True)
+        self.content_layout.addWidget(self.label)
+        self.progress = ImportProgressBar()
+        self.progress.setRange(0, 0)
+        self.content_layout.addWidget(self.progress)
+        self.add_actions("检查中…", "取消", default_accept=False)
+        self.accept_button.setEnabled(False)
+        self.start(lambda cancel, emit: updater.check_update(cancel=cancel), self.checked)
 
-    def show_preview(self, index, previous):
-        if not index.isValid():
+    def start(self, operation, handler):
+        self.cancel = Event()
+        self.worker = TaskWorker(operation, self.cancel, self)
+        self.worker.result.connect(handler)
+        self.worker.error.connect(self.failed)
+        self.worker.progress.connect(self.download_progress)
+        self.worker.finished.connect(self.finished_work)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.start()
+        self.accept_button.setEnabled(False)
+
+    def checked(self, release):
+        if self.cancel.is_set():
             return
-        media = self.model.files[index.row()]
-        self._preview_path = str(media.path)
-        self.preview.clear()
-        if media.path.suffix.lower() not in core.JPEG_EXTENSIONS:
-            self.preview.setText("此格式暂不提供预览")
-            return
-        self.preview.setText("正在读取预览…")
-        task = PreviewTask(media.path)
-        task.signals.ready.connect(self.preview_ready)
-        QtCore.QThreadPool.globalInstance().start(task)
-
-    @QtCore.Slot(str, QtGui.QImage)
-    def preview_ready(self, path, image):
-        if path != self._preview_path:
-            return
-        if image.isNull():
-            self.preview.setText("无法读取预览")
+        self.release = release
+        self.progress.hide()
+        if release is None:
+            self.label.setText(f"目前已是最新版本（v{APP_VERSION}）。")
+            self.accept_button.setText("确定")
+            self.cancel_button.hide()
+        elif self.can_install():
+            self.label.setText(f"发现新版本 v{release.version}（当前 v{APP_VERSION}）。\n是否下载并更新？完成后 Copyer 会自动重启。")
+            self.accept_button.setText("更新并重启")
+            self.cancel_button.setText("暂不更新")
         else:
-            self.preview.setPixmap(QtGui.QPixmap.fromImage(image).scaled(self.preview.size(), QtCore.Qt.AspectRatioMode.KeepAspectRatio, QtCore.Qt.TransformationMode.SmoothTransformation))
+            reason = "源码运行请使用便携版更新。" if not getattr(sys, 'frozen', False) else "此版本暂不提供可自动校验的 Windows 更新包。"
+            self.label.setText(f"发现新版本 v{release.version}。\n{reason}")
+            self.accept_button.setText("打开发布页")
+            self.cancel_button.setText("暂不更新")
+
+    def can_install(self):
+        return (self.release and self.release.asset_url and self.release.sha256
+                and os.name == 'nt' and getattr(sys, 'frozen', False))
+
+    def accept(self):
+        if self.worker is not None:
+            return
+        if self.can_install():
+            self.label.setText(f"正在下载 v{self.release.version}，完成后将校验更新包…")
+            self.accept_button.setText("正在更新…")
+            self.cancel_button.setText("取消")
+            self.progress.setRange(0, 1000)
+            self.progress.setValue(0)
+            self.progress.show()
+            release = self.release
+            self.start(lambda cancel, emit: updater.prepare_update(release, cancel, emit), self.downloaded)
+        elif self.release:
+            if QtGui.QDesktopServices.openUrl(QtCore.QUrl(self.release.page_url)):
+                super().accept()
+            else:
+                self.label.setText("无法打开浏览器，请稍后重试。")
+        else:
+            super().accept()
+
+    def download_progress(self, values):
+        received, total = values
+        self.progress.setValue(round(received/total*1000))
+        self.label.setText(f"正在下载更新：{format_bytes(received)} / {format_bytes(total)}" if received < total
+                           else "下载完成，正在校验并准备更新…")
+
+    def downloaded(self, prepared):
+        self.prepared = prepared
+
+    def failed(self, message):
+        if not self.cancel.is_set():
+            self.label.setText("更新未完成：" + (message or "请稍后重试。"))
+            self.progress.hide()
+            self.accept_button.setText("重试更新" if self.release else "关闭")
+
+    def finished_work(self):
+        self.worker = None
+        self.accept_button.setEnabled(True)
+        if self.close_when_finished:
+            if self.prepared:
+                import shutil
+                shutil.rmtree(self.prepared.workspace, ignore_errors=True)
+            super().reject()
+            return
+        if self.prepared:
+            try:
+                updater.launch_installer(self.prepared)
+            except (OSError, updater.UpdateError) as exc:
+                import shutil
+                shutil.rmtree(self.prepared.workspace, ignore_errors=True)
+                self.prepared = None
+                self.failed(str(exc))
+                return
+            self.parentWidget().save_settings()
+            super().accept()
+            QtCore.QTimer.singleShot(0, QtWidgets.QApplication.instance().quit)
+
+    def reject(self):
+        if self.worker is not None:
+            self.close_when_finished = True
+            self.cancel.set()
+            self.label.setText("正在取消，请稍候…")
+            self.cancel_button.setEnabled(False)
+            return
+        super().reject()
+
+    def closeEvent(self, event):
+        if self.worker is not None:
+            self.reject()
+            event.ignore()
+        else:
+            super().closeEvent(event)
 
 
 class MediaImporterWindow(QtWidgets.QMainWindow):
@@ -874,10 +837,12 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
         self.apply_material_preferences()
         self.phase = "empty"
         self.scan_result: core.ScanResult | None = None
+        self.metadata_cache: dict = {}
         self.selected: set[Path] = set()
         self.suffixes: dict[str, str] = {}
         self.rows: dict[str, GroupRow] = {}
         self.results: dict[Path, core.FileResult] = {}
+        self.cleanup_issues: list[core.FileIssue] = []
         self.last_job: core.ImportJob | None = None
         self.last_progress: core.Progress | None = None
         self._thread = None
@@ -886,7 +851,7 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
         self._close_after_task = False
         self._loading = True
         self._scale = 1.0
-        self._compact = False
+        self._settings_open = False
         self._frame_gesture = None
         self._build_ui()
         screen = QtGui.QGuiApplication.screenAt(QtGui.QCursor.pos()) or self.screen()
@@ -923,6 +888,8 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
         self.canvas.setObjectName("copyerCanvas")
         self.setCentralWidget(self.canvas)
         self.canvas.installEventFilter(self)
+        self.home_page = QtWidgets.QWidget(self.canvas)
+        self.home_page.installEventFilter(self)
         self.title_label = QtWidgets.QLabel("Copyer", self.canvas)
         self.meta_label = ElidedLabel(f"v{APP_VERSION} · by {APP_AUTHOR}", self.canvas)
         self.meta_label.setStyleSheet("color:#666666")
@@ -938,33 +905,31 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
             button.setAccessibleName(tip)
             button.clicked.connect(callback)
             self.window_controls.append(button)
-        self.title_separator = QtWidgets.QFrame(self.canvas)
-        self.title_separator.setStyleSheet("background:#dddddd")
-        self.source_card = PathCard(True, self.canvas)
-        self.target_card = PathCard(False, self.canvas)
+        self.source_card = PathCard(True, self.home_page)
+        self.target_card = PathCard(False, self.home_page)
         self.source_card.choose_requested.connect(self.choose_source)
         self.target_card.choose_requested.connect(self.choose_target)
         self.source_card.devices_requested.connect(self.show_devices)
-        self.raw_checkbox = SmallCheckBox("RAW", self.canvas)
-        self.jpeg_checkbox = SmallCheckBox("照片", self.canvas)
+        self.raw_checkbox = SmallCheckBox("RAW", self.home_page)
+        self.jpeg_checkbox = SmallCheckBox("照片", self.home_page)
         self.jpeg_checkbox.setToolTip("JPEG / HEIC / HEIF；RAW 使用左侧选项")
-        self.video_checkbox = SmallCheckBox("视频", self.canvas)
+        self.video_checkbox = SmallCheckBox("视频", self.home_page)
         self.format_boxes = [self.raw_checkbox, self.jpeg_checkbox, self.video_checkbox]
         for box, key in zip(self.format_boxes, ("raw", "jpg", "mp4")):
             box.setChecked(self.settings.value("formats/"+key, True, type=bool))
             box.toggled.connect(self.parameters_changed)
-        self.scan_button = QtWidgets.QPushButton("重新扫描", self.canvas)
+        self.scan_button = QtWidgets.QPushButton("重新扫描", self.home_page)
         self.scan_button.setIcon(ui_icon("refresh"))
         self.scan_button.clicked.connect(self.start_scan)
-        self.select_all = SmallCheckBox("全选", self.canvas)
+        self.select_all = SmallCheckBox("全选", self.home_page)
         self.select_all.setTristate(True)
         self.select_all.setAccessibleName("全选导入文件")
         self.select_all.clicked.connect(self.toggle_all)
-        self.count_heading = QtWidgets.QLabel("文件", self.canvas)
+        self.count_heading = QtWidgets.QLabel("文件", self.home_page)
         self.count_heading.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self.header_line = QtWidgets.QFrame(self.canvas)
+        self.header_line = QtWidgets.QFrame(self.home_page)
         self.header_line.setStyleSheet("background:#d9d9d9")
-        self.scroll = QtWidgets.QScrollArea(self.canvas)
+        self.scroll = QtWidgets.QScrollArea(self.home_page)
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.row_container = QtWidgets.QWidget()
@@ -980,27 +945,36 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
         self.empty_label.setStyleSheet("color:#8a8a8a")
         self.empty_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.scroll.viewport().installEventFilter(self)
-        self.status_label = ElidedLabel("待扫描", self.canvas)
-        self.percent_label = QtWidgets.QLabel("", self.canvas)
+        self.status_label = ElidedLabel("待扫描", self.home_page)
+        self.percent_label = QtWidgets.QLabel("", self.home_page)
         self.percent_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
         self.percent_label.setStyleSheet("color:#666666")
-        self.progress_bar = ImportProgressBar(self.canvas)
+        self.progress_bar = ImportProgressBar(self.home_page)
         self.progress_bar.setRange(0, 1000)
         self.progress_bar.setValue(0)
         self.progress_bar.setTextVisible(False)
         self.progress_bar.setAccessibleName("导入进度，包含复制与校验")
         self.progress_bar.setToolTip("按复制与校验实际处理的字节推进")
-        self.context_label = ElidedLabel("", self.canvas)
+        self.context_label = ElidedLabel("", self.home_page)
         self.context_label.setStyleSheet("color:#666666")
-        self.speed_label = QtWidgets.QLabel("", self.canvas)
+        self.speed_label = QtWidgets.QLabel("", self.home_page)
         self.speed_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
         self.speed_label.setStyleSheet("color:#666666")
-        self.issues_button = QtWidgets.QPushButton("查看失败文件", self.canvas)
+        self.issues_button = QtWidgets.QPushButton("查看失败文件", self.home_page)
         self.issues_button.setStyleSheet("padding:0;")
         self.issues_button.clicked.connect(self.show_issues)
         self.issues_button.hide()
-        self.import_button = GlassButton("导入", self.canvas)
+        self.import_button = GlassButton("导入", self.home_page)
         self.import_button.clicked.connect(self.primary_action)
+        self.cleanup_button = QtWidgets.QPushButton("删除已校验的源文件", self.home_page)
+        self.cleanup_button.setStyleSheet("padding:0;")
+        self.cleanup_button.setToolTip("删除前重新校验来源和目标；只删除本次已完整导入的源文件")
+        self.cleanup_button.clicked.connect(self.start_cleanup)
+        self.cleanup_button.hide()
+        self.settings_page = SettingsPage(self)
+        self.settings_page.hide()
+        self.settings_back = QtGui.QShortcut(QtGui.QKeySequence("Escape"), self)
+        self.settings_back.activated.connect(self.show_home)
         self.size_grip = QtWidgets.QSizeGrip(self.canvas)
         self.canvas.setStyleSheet("""
             QToolButton#windowIconButton { border:0; background:transparent; }
@@ -1010,86 +984,12 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
         """)
 
     def relayout(self):
-        if not hasattr(self, "canvas"):
+        if not hasattr(self, "settings_page"):
             return
         w, h = self.canvas.width(), self.canvas.height()
-        self._compact = w < 1000 or h < 640
-        if self._compact:
-            self.relayout_compact(w, h)
-            return
-        self.speed_label.setVisible(True)
-        self.title_separator.show()
-        self.scan_button.setText("重新扫描")
-        self.scan_button.setStyleSheet("")
-        s = max(.64, min(1.15, w / 1536))
-        self._scale = s
-
-        def place(widget, x, y, width, height):
-            widget.setGeometry(round(x), round(y), max(1, round(width)), max(1, round(height)))
-
-        place(self.title_label, 45*s, 13*s, 130*s, 58*s)
-        font(self.title_label, 36*s, medium=True)
-        place(self.meta_label, 188*s, 22*s, 420*s, 40*s)
-        font(self.meta_label, 24*s)
-        for i, button in enumerate(self.window_controls):
-            button.setStyleSheet("")
-            x = w - (318 if i == 0 else 226-(i-1)*72)*s
-            place(button, x, 14*s, 56*s, 50*s)
-            button.setIconSize(QtCore.QSize(round((36 if i == 0 else 32)*s), round((36 if i == 0 else 32)*s)))
-        place(self.title_separator, w-242*s, 24*s, 1, 32*s)
-        stacked = w < 1060
-        extra = 186*s if stacked else 0
-        if stacked:
-            place(self.source_card, 42*s, 125*s, w-84*s, 172*s)
-            place(self.target_card, 42*s, 311*s, w-84*s, 172*s)
-        else:
-            width = (w-146*s)/2
-            place(self.source_card, 42*s, 125*s, width, 172*s)
-            place(self.target_card, w/2+30*s, 125*s, width, 172*s)
-        self.source_card.relayout(s, False)
-        self.target_card.relayout(s, False)
-        format_x = 56*s
-        for box in self.format_boxes:
-            box.scale = s
-            font(box, 26*s, medium=True)
-            width = box.sizeHint().width()
-            place(box, format_x, 301*s+extra, width, 56*s)
-            format_x += width+28*s
-        place(self.scan_button, w-215*s, 300*s+extra, 180*s, 56*s)
-        font(self.scan_button, 26*s, medium=True)
-        self.scan_button.setIconSize(QtCore.QSize(round(44*s), round(44*s)))
-        self.select_all.scale = s
-        place(self.select_all, 56*s, 386*s+extra, 220*s, 56*s)
-        font(self.select_all, 26*s, medium=True)
-        place(self.count_heading, w-300*s, 386*s+extra, 100*s, 56*s)
-        font(self.count_heading, 26*s, medium=True)
-        place(self.header_line, 44*s, 451*s+extra, w-88*s, 1)
-        scroll_y = 452*s+extra
-        footer_y = h-200*s
-        place(self.scroll, 44*s, scroll_y, w-88*s, max(60*s, footer_y-scroll_y-65*s))
-        self.empty_label.setGeometry(self.scroll.viewport().rect())
-        font(self.empty_label, 23*s)
-        for row in self.rows.values():
-            row.relayout(s, False)
-        track_width = w-428*s
-        place(self.status_label, 56*s, footer_y+6*s, max(200*s, track_width-100*s), 46*s)
-        place(self.percent_label, 56*s+track_width-120*s, footer_y+6*s, 120*s, 46*s)
-        font(self.status_label, 26*s, medium=True)
-        font(self.percent_label, 25*s)
-        place(self.progress_bar, 56*s, footer_y+56*s, track_width, 20*s)
-        place(self.context_label, 56*s, footer_y+89*s, max(220*s, track_width-350*s), 42*s)
-        place(self.speed_label, 56*s+track_width-350*s, footer_y+89*s, 350*s, 42*s)
-        place(self.issues_button, 56*s+track_width-270*s, footer_y+89*s, 270*s, 42*s)
-        for label in (self.context_label, self.speed_label, self.issues_button):
-            font(label, 24*s)
-        place(self.import_button, w-344*s, footer_y+10*s, 304*s, 106*s)
-        self.import_button.scale = s
-        self.import_button.graphicsEffect().setBlurRadius(24)
-        self.import_button.graphicsEffect().setOffset(0, 6)
-        font(self.import_button, 29*s, medium=True)
-        place(self.size_grip, w-15, h-15, 15, 15)
-
-    def relayout_compact(self, w, h):
+        self.home_page.setGeometry(self.canvas.rect())
+        page_top = 36 if h < 360 or w < 480 else 48
+        self.settings_page.setGeometry(8, page_top, w-16, max(1, h-page_top-8))
         dense = h < 360 or w < 480
         s = .55 if dense else .7
         self._scale = s
@@ -1104,7 +1004,6 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
             button.setStyleSheet("padding:2px;")
             button.setGeometry(controls_x+i*control_width, 8, control_width, title_height-2)
             button.setIconSize(QtCore.QSize(17 if dense else 21, 17 if dense else 21))
-        self.title_separator.hide()
         meta_x = margin+(64 if dense else 83)
         self.meta_label.setGeometry(meta_x, 7, max(10, controls_x-meta_x-4), title_height)
         font(self.meta_label, 11 if dense else 13)
@@ -1114,7 +1013,7 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
         self.source_card.setGeometry(margin-2, cards_y, card_width+2, card_height)
         self.target_card.setGeometry(margin+card_width+8, cards_y, card_width+2, card_height)
         for card in (self.source_card, self.target_card):
-            card.relayout(s, True)
+            card.relayout(s)
         formats_y = cards_y+card_height+1
         format_x = margin
         for box in self.format_boxes:
@@ -1135,16 +1034,17 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
         self.select_all.scale = s
         self.select_all.setGeometry(margin, header_y, 90, 20 if dense else 27)
         font(self.select_all, 12 if dense else 14, medium=True)
-        self.count_heading.setGeometry(w-margin-69, header_y, 38, 20 if dense else 27)
+        self.count_heading.setGeometry(w-margin-64, header_y, 64, 20 if dense else 27)
         font(self.count_heading, 12 if dense else 14)
         scroll_y = header_y+(22 if dense else 31)
         self.header_line.setGeometry(margin, scroll_y-1, w-margin*2, 1)
-        footer_y = h-(59 if dense else 78)
+        cleanup_visible = not self.cleanup_button.isHidden()
+        footer_y = h-(59 if dense else 78)-(22 if dense else 28)*cleanup_visible
         self.scroll.setGeometry(margin, scroll_y, w-margin*2, max(18, footer_y-scroll_y-2))
         self.empty_label.setGeometry(self.scroll.viewport().rect())
         font(self.empty_label, 11 if dense else 14)
         for row in self.rows.values():
-            row.relayout(s, True)
+            row.relayout(s)
         action_width = 116 if dense else 155
         action_x = w-margin-action_width
         track_width = max(70, action_x-margin-12)
@@ -1163,6 +1063,8 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
         self.import_button.graphicsEffect().setBlurRadius(10)
         self.import_button.graphicsEffect().setOffset(0, 3)
         font(self.import_button, 12 if dense else 15, medium=True)
+        self.cleanup_button.setGeometry(action_x-4, footer_y+(43 if dense else 58), action_width+8, 22 if dense else 27)
+        font(self.cleanup_button, 11 if dense else 13)
         self.size_grip.setGeometry(w-18, h-18, 10, 10)
         self.canvas.update()
 
@@ -1173,7 +1075,7 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
     def eventFilter(self, watched, event):
         if hasattr(self, "empty_label") and watched is self.scroll.viewport() and event.type() == QtCore.QEvent.Type.Resize:
             self.empty_label.setGeometry(watched.rect())
-        if watched is getattr(self, "canvas", None):
+        if watched in (getattr(self, "canvas", None), getattr(self, "home_page", None)):
             if event.type() == QtCore.QEvent.Type.MouseButtonPress:
                 self.mousePressEvent(event)
                 return True
@@ -1218,7 +1120,7 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
     def mousePressEvent(self, event):
         if event.button() == QtCore.Qt.MouseButton.LeftButton and not self.isMaximized():
             edges = self.resize_edges(event.position())
-            if edges or event.position().y() < (34 if self._compact else 80*self._scale):
+            if edges or event.position().y() < 34:
                 self._frame_gesture = (event.globalPosition().toPoint(), self.geometry(), edges)
                 event.accept()
                 return
@@ -1251,7 +1153,7 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
 
     def mouseDoubleClickEvent(self, event):
         self._frame_gesture = None
-        if event.button() == QtCore.Qt.MouseButton.LeftButton and event.position().y() < (34 if self._compact else 80*self._scale):
+        if event.button() == QtCore.Qt.MouseButton.LeftButton and event.position().y() < 34:
             self.toggle_maximized()
 
     def toggle_maximized(self):
@@ -1276,6 +1178,8 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
     def set_source(self, path: str):
         if self.busy:
             return
+        if path != self.source:
+            self.metadata_cache.clear()
         self.source = path
         self.source_card.set_path(path)
         self.parameters_changed()
@@ -1330,6 +1234,8 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
         self.save_settings()
 
     def reset_progress(self):
+        self.cleanup_issues.clear()
+        self.cleanup_button.hide()
         self.progress_bar.setRange(0, 1000)
         self.progress_bar.setValue(0)
         self.percent_label.clear()
@@ -1350,7 +1256,6 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
                 row.suffix.setText(self.suffixes.get(day, ""))
                 row.selection_changed.connect(self.toggle_group)
                 row.suffix_changed.connect(self.change_suffix)
-                row.detail_requested.connect(self.show_details)
                 self.row_layout.insertWidget(self.row_layout.count()-1, row)
                 self.rows[day] = row
         self.empty_label.setVisible(not self.rows)
@@ -1398,6 +1303,9 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
             row.warning.setVisible(any(self.results.get(media.path) and self.results[media.path].status == "failed" for media in row.files))
         for control in (self.source_card, self.target_card, self.scan_button, *self.format_boxes, self.window_controls[0]):
             control.setEnabled(not self.busy)
+        self.cleanup_button.setVisible(not self.busy and self.phase in {"complete", "partial", "cancelled"}
+                                       and bool(core.cleanup_candidates(self.results.values())))
+        self.relayout()
         if self.busy:
             self.import_button.setText("取消")
             self.import_button.setEnabled(not self._cancel.is_set())
@@ -1454,7 +1362,7 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
         self.progress_bar.setRange(0, 0)
         self.empty_label.setText("正在查找媒体文件…")
         video_time_utc = self.video_time_utc
-        self._start_worker(lambda cancel, emit: core.scan(source, extensions, cancel, lambda count, path, groups: emit((count, path, groups)), quicktime_utc=video_time_utc), self.scan_finished, self.scan_progress)
+        self._start_worker(lambda cancel, emit: core.scan(source, extensions, cancel, lambda count, path, groups: emit((count, path, groups)), quicktime_utc=video_time_utc, metadata_cache=self.metadata_cache), self.scan_finished, self.scan_progress)
 
     def scan_progress(self, data):
         count, path, groups = data
@@ -1519,7 +1427,7 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
         self.last_progress = progress
         if self._cancel.is_set():
             return
-        self.status_label.setText({"copy": "正在导入", "verify": "正在校验", "compare": "正在比较", "verified": "正在导入", "failed": "正在导入"}.get(progress.phase, "正在导入"))
+        self.status_label.setText({"copy": "正在导入", "verify": "正在校验", "compare": "正在比较", "verified": "正在导入", "failed": "正在导入", "cleanup_verify": "删除前校验"}.get(progress.phase, "正在导入"))
         ratio = min(.999, progress.done / progress.total) if progress.total else 0
         self.progress_bar.setValue(round(ratio*1000))
         self.percent_label.setText(f"{int(ratio*100)}%")
@@ -1540,12 +1448,12 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
         self.progress_bar.setRange(0, 1000)
         self.speed_label.clear()
         total = sum(max(item.media.size, 1) for item in self.last_job.items)
-        verified = sum(max(entry.item.media.size, 1) for entry in self.results.values() if entry.status in {"copied", "skipped"})
+        verified = sum(max(entry.item.media.size, 1) for entry in self.results.values() if entry.status in {"copied", "skipped", "deleted"})
         percent = round(verified/total*1000) if total else 0
         self.progress_bar.setValue(percent)
         self.percent_label.setText(f"{percent//10}%")
         if self.phase == "complete":
-            self.status_label.setText("导入完成")
+            self.status_label.setText("导入完成，校验通过")
             self.context_label.setText(f"{counts['copied']} 个文件已导入" + (f" · {counts['skipped']} 个相同文件已跳过" if counts["skipped"] else ""))
         else:
             self.status_label.setText("已取消" if result.cancelled else "部分失败")
@@ -1554,6 +1462,51 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
             self.issues_button.show()
         self.progress_bar.setToolTip(self.context_label.text())
         self.relayout()
+        self.refresh_selection()
+
+    def start_cleanup(self):
+        if self.busy or not self.last_job:
+            return
+        candidates = core.cleanup_candidates(self.results.values())
+        if not candidates:
+            return
+        dialog = ThemedDialog(self, "删除已校验的源文件", (530, 360))
+        label = QtWidgets.QLabel(f"将从以下来源永久删除 {len(candidates)} 个已校验文件：\n{self.last_job.source}\n\n"
+                                "删除前会再次逐个核对源文件和目标文件。未导入、校验失败或已变化的文件会保留；文件夹会保留。此操作不经过回收站。")
+        label.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        label.setWordWrap(True)
+        dialog.content_layout.addWidget(label)
+        listing = QtWidgets.QPlainTextEdit()
+        listing.setReadOnly(True)
+        listing.setPlainText("\n".join(str(entry.item.media.path.relative_to(self.last_job.source)) for entry in candidates))
+        dialog.content_layout.addWidget(listing)
+        dialog.add_actions("删除源文件", "保留", default_accept=False)
+        accepted = dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted
+        dialog.deleteLater()
+        if not accepted:
+            return
+        self._phase_before_cleanup = self.phase
+        self.phase = "cleaning"
+        self.reset_progress()
+        self.status_label.setText("删除前校验")
+        job = self.last_job
+        self._start_worker(lambda cancel, emit: core.run_cleanup(job, candidates, cancel, emit),
+                           self.cleanup_finished, self.import_progress)
+
+    def cleanup_finished(self, result: core.CleanupResult):
+        for path in result.deleted:
+            self.results[path] = replace(self.results[path], status="deleted")
+        self.cleanup_issues = result.issues
+        self.phase = self._phase_before_cleanup
+        self.progress_bar.setValue(1000 if not result.cancelled else self.progress_bar.value())
+        self.percent_label.setText("" if result.cancelled else "100%")
+        self.speed_label.clear()
+        self.status_label.setText("删除已停止" if result.cancelled else "源文件清理完成")
+        self.context_label.setText(f"已删除 {len(result.deleted)} 个源文件 · {len(core.cleanup_candidates(self.results.values()))} 个保留")
+        self.progress_bar.setToolTip(self.context_label.text())
+        if result.issues:
+            self.issues_button.setText("查看保留原因")
+            self.issues_button.show()
         self.refresh_selection()
 
     def request_cancel(self):
@@ -1569,16 +1522,9 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
         self.context_label.setToolTip(message)
         self.empty_label.setText("重新扫描以继续")
 
-    def show_details(self, day):
-        try:
-            dialog = FileDetailsDialog(self, day)
-            dialog.exec()
-            dialog.deleteLater()
-        except ValueError as exc:
-            self.notify("后缀需要修改", str(exc))
-
     def show_issues(self):
-        issues = [(str(entry.item.media.path), entry.error) for entry in self.results.values() if entry.status in {"failed", "pending"}]
+        issues = [(str(item.path), item.message) for item in self.cleanup_issues]
+        issues += [(str(entry.item.media.path), entry.error) for entry in self.results.values() if entry.status in {"failed", "pending"}]
         if not issues and self.scan_result:
             issues = [(str(item.path), item.message) for item in self.scan_result.issues]
         dialog = ThemedDialog(self, "本次任务问题", (900, 480))
@@ -1601,20 +1547,39 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
         dialog.deleteLater()
 
     def show_settings(self):
-        dialog = SettingsDialog(self)
-        if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
-            date_policy_changed = self.video_time_utc != dialog.video_time.isChecked()
-            self.video_time_utc = dialog.video_time.isChecked()
-            self.skip_identical = dialog.duplicate.isChecked()
-            self.reduce_transparency = dialog.transparency.isChecked()
-            self.reduce_motion = dialog.motion.isChecked()
-            self.settings.setValue("display/reduce_transparency", self.reduce_transparency)
-            self.settings.setValue("display/reduce_motion", self.reduce_motion)
-            self.apply_material_preferences()
-            self.save_settings()
-            if date_policy_changed:
-                self.parameters_changed()
-        dialog.deleteLater()
+        if self.busy:
+            return
+        self._settings_open = True
+        self.settings_page.load_preferences()
+        self.home_page.hide()
+        self.settings_page.show()
+        self.window_controls[0].hide()
+        self.settings_page.back_button.setFocus()
+        self.relayout()
+
+    def show_home(self):
+        if not self._settings_open:
+            return
+        self._settings_open = False
+        self.settings_page.hide()
+        self.home_page.show()
+        self.window_controls[0].show()
+        self.refresh_selection()
+        self.window_controls[0].setFocus()
+
+    def apply_settings(self):
+        page = self.settings_page
+        date_policy_changed = self.video_time_utc != page.video_time.isChecked()
+        self.video_time_utc = page.video_time.isChecked()
+        self.skip_identical = page.duplicate.isChecked()
+        self.reduce_transparency = page.transparency.isChecked()
+        self.reduce_motion = page.motion.isChecked()
+        self.settings.setValue("display/reduce_transparency", self.reduce_transparency)
+        self.settings.setValue("display/reduce_motion", self.reduce_motion)
+        self.apply_material_preferences()
+        self.save_settings()
+        if date_policy_changed:
+            self.parameters_changed()
 
     def notify(self, title, message):
         dialog = MessageDialog(self, title, message)

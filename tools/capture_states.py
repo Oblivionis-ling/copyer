@@ -26,7 +26,6 @@ output = context['output'] / subfolder
 window.show()
 
 import copyer_core as core
-from copyer_ui import FileDetailsDialog
 from PySide6 import QtCore, QtWidgets
 
 
@@ -93,25 +92,10 @@ with tempfile.TemporaryDirectory(dir=ROOT / '_work', prefix='capture-') as tempo
     settle()
     assert window.phase == 'complete'
 
-    window.set_target(str(target / 'preview'))
-    dialog = FileDetailsDialog(window, '2026-10-27')
-    dialog.show()
-    dialog.table.selectRow(0)
-    deadline = time.monotonic() + 5
-    while dialog.preview.pixmap().isNull() and time.monotonic() < deadline:
-        app.processEvents()
-        time.sleep(.01)
-    capture('state-details', dialog)
-    dialog.close()
-
-    def capture_modal():
-        modal = app.activeModalWidget()
-        if modal:
-            capture('state-settings', modal)
-            modal.reject()
-
-    QtCore.QTimer.singleShot(100, capture_modal)
     window.show_settings()
+    app.processEvents()
+    capture('state-settings')
+    window.show_home()
 
     window.resize(880, 680)
     app.processEvents()

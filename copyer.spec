@@ -33,8 +33,8 @@ a = Analysis(
 )
 
 # Qt hooks collect plugins for many products. Copyer paints raster QWidget
-# surfaces and only previews JPEG; it does not create an OpenGL context.
-plugins = {'platforms/qwindows.dll', 'imageformats/qjpeg.dll', 'imageformats/qico.dll'}
+# surfaces with an ICO app icon; media thumbnails are never decoded.
+plugins = {'platforms/qwindows.dll', 'imageformats/qico.dll'}
 qt_libraries = {'qt6core.dll', 'qt6gui.dll', 'qt6widgets.dll'}
 perl_duplicates = {'perl532.dll', 'libstdc++-6.dll', 'libgcc_s_seh-1.dll',
                    'libwinpthread-1.dll', 'liblzma-5__.dll'}

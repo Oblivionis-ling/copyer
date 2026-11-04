@@ -12,7 +12,7 @@ def verify(directory: Path) -> dict:
     required = (
         'app_icon.ico', 'assets/ui-icons.json', 'python311.dll',
         'PySide6/Qt6Core.dll', 'PySide6/Qt6Gui.dll', 'PySide6/Qt6Widgets.dll',
-        'PySide6/plugins/platforms/qwindows.dll', 'PySide6/plugins/imageformats/qjpeg.dll',
+        'PySide6/plugins/platforms/qwindows.dll',
         'PySide6/plugins/imageformats/qico.dll', 'PySide6/translations/qtbase_zh_CN.qm',
         'exiftool/exiftool_files/perl.exe', 'exiftool/exiftool_files/exiftool.pl',
         'exiftool/exiftool_files/LICENSE', 'exiftool/exiftool_files/Licenses_Strawberry_Perl.zip',
@@ -28,7 +28,7 @@ def verify(directory: Path) -> dict:
         relative = path.relative_to(directory)
         assert not (set(relative.parts) & forbidden), f'Development files: {relative}'
         assert path.suffix.lower() not in {'.pod', '.ttf', '.otf', '.ps1', '.bat', '.py'}, f'Unexpected payload: {relative}'
-        assert path.name not in {'Geolocation.dat', 'opengl32sw.dll', 'exiftool(-k).exe'}, f'Unused payload: {relative}'
+        assert path.name not in {'Geolocation.dat', 'opengl32sw.dll', 'exiftool(-k).exe', 'qjpeg.dll'}, f'Unused payload: {relative}'
 
     # Validate native imports after filtering. No dependency may come from the
     # Conda environment or PATH; only the bundle and Windows system are allowed.

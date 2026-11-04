@@ -47,7 +47,6 @@ class InterfaceTests(unittest.TestCase):
         self.window.close()
         self.window.deleteLater()
         self.app.processEvents()
-        QtCore.QThreadPool.globalInstance().waitForDone(5000)
         self.temp.cleanup()
 
     def wait(self, condition, timeout=5):
@@ -82,7 +81,7 @@ class InterfaceTests(unittest.TestCase):
         self.assertTrue(all(raw.glyphIndexesForString('Copyer 来源 导入 海边 城市 全选')))
         self.assertIn('Microsoft YaHei UI', self.app.font().families())
 
-    def test_group_and_file_selection_propagate_mixed_state(self):
+    def test_group_selection_and_select_all_propagate_state(self):
         self.scan()
         day = next(iter(self.window.rows))
         row = self.window.rows[day]
@@ -90,16 +89,8 @@ class InterfaceTests(unittest.TestCase):
         self.assertEqual(row.check.checkState(), QtCore.Qt.CheckState.Unchecked)
         self.assertEqual(self.window.select_all.checkState(), QtCore.Qt.CheckState.PartiallyChecked)
         self.window.select_all.click()
-        dialog = ui.FileDetailsDialog(self.window, day)
-        dialog.model.setData(dialog.model.index(0, 0), QtCore.Qt.CheckState.Unchecked, QtCore.Qt.ItemDataRole.CheckStateRole)
-        self.assertEqual(len(self.window.selected), 2)
-        self.assertIn('2', self.window.import_button.text())
-        dialog.show()
-        self.app.processEvents()
-        rect = dialog.table.visualRect(dialog.model.index(0, 0))
-        QtTest.QTest.mouseClick(dialog.table.viewport(), QtCore.Qt.MouseButton.LeftButton, pos=rect.center())
         self.assertEqual(len(self.window.selected), 3)
-        dialog.close()
+        self.assertIn('3', self.window.import_button.text())
 
     def test_suffix_validation_and_real_import(self):
         self.scan()
@@ -120,6 +111,121 @@ class InterfaceTests(unittest.TestCase):
         with patch.object(QtGui.QDesktopServices, 'openUrl', return_value=True) as opened:
             self.window.import_button.click()
             self.assertEqual(Path(opened.call_args.args[0].toLocalFile()), self.target)
+
+    def test_verified_cleanup_button_confirmation_and_source_invalidation(self):
+        self.assertFalse(self.window.cleanup_button.isVisible())
+        self.scan()
+        self.window.import_button.click()
+        self.wait(lambda: not self.window.busy)
+        self.assertTrue(self.window.cleanup_button.isVisible())
+        self.assertIn('校验通过', self.window.status_label.text())
+        for width, height in ((360, 230), (700, 526), (1536, 1024)):
+            self.window.resize(width, height)
+            self.app.processEvents()
+            self.assertTrue(self.window.canvas.rect().contains(self.window.cleanup_button.geometry()))
+            self.assertFalse(self.window.cleanup_button.geometry().intersects(self.window.import_button.geometry()))
+            self.assertLess(self.window.scroll.geometry().bottom(), self.window.status_label.y())
+        with patch.object(ui.ThemedDialog, 'exec', return_value=QtWidgets.QDialog.DialogCode.Rejected):
+            self.window.cleanup_button.click()
+        self.assertEqual(len(list(self.source.iterdir())), 3)
+        with patch.object(ui.ThemedDialog, 'exec', return_value=QtWidgets.QDialog.DialogCode.Accepted):
+            self.window.cleanup_button.click()
+        self.wait(lambda: not self.window.busy)
+        self.assertFalse(self.window.cleanup_button.isVisible())
+        self.assertEqual(list(self.source.iterdir()), [])
+        self.assertEqual(len(list(self.target.rglob('*.*'))), 3)
+        self.assertTrue(all(entry.status == 'deleted' for entry in self.window.results.values()))
+        self.window.set_source(str(self.root / 'another'))
+        self.assertFalse(self.window.cleanup_button.isVisible())
+
+    def test_cleanup_retains_changed_files_and_reports_reason(self):
+        self.scan()
+        self.window.import_button.click()
+        self.wait(lambda: not self.window.busy)
+        (self.source / 'a.cr3').write_bytes(b'changed source')
+        with patch.object(ui.ThemedDialog, 'exec', return_value=QtWidgets.QDialog.DialogCode.Accepted):
+            self.window.cleanup_button.click()
+        self.wait(lambda: not self.window.busy)
+        self.assertEqual([path.name for path in self.source.iterdir()], ['a.cr3'])
+        self.assertEqual(len(self.window.cleanup_issues), 1)
+        self.assertTrue(self.window.issues_button.isVisible())
+
+    def test_update_check_latest_newer_error_and_cancel(self):
+        settings = self.window.settings_page
+        self.window.show_settings()
+        self.assertEqual(settings.update_button.text(), '检查更新')
+        for response in (None, ui.updater.Release('1.5.4', ui.updater.RELEASES_URL)):
+            with patch.object(ui.updater, 'check_update', return_value=response):
+                dialog = ui.UpdateDialog(self.window)
+                dialog.show()
+                self.wait(lambda: dialog.worker is None)
+                self.assertIn('目前已是最新版本' if response is None else '发现新版本', dialog.label.text())
+                dialog.reject()
+                dialog.deleteLater()
+        with patch.object(ui.updater, 'check_update', side_effect=ui.updater.UpdateError('无法连接 GitHub')):
+            dialog = ui.UpdateDialog(self.window)
+            dialog.show()
+            self.wait(lambda: dialog.worker is None)
+            self.assertIn('无法连接 GitHub', dialog.label.text())
+            dialog.accept()
+            dialog.deleteLater()
+        entered = Event()
+        def wait_for_cancel(**kwargs):
+            entered.set()
+            kwargs['cancel'].wait(3)
+            raise core.Cancelled()
+        with patch.object(ui.updater, 'check_update', side_effect=wait_for_cancel):
+            dialog = ui.UpdateDialog(self.window)
+            dialog.show()
+            self.wait(entered.is_set)
+            dialog.reject()
+            self.assertIsNotNone(dialog.worker)
+            self.wait(lambda: dialog.worker is None)
+            self.assertFalse(dialog.isVisible())
+            dialog.deleteLater()
+        self.window.show_home()
+
+    def test_new_update_requires_click_and_download_failure_can_retry(self):
+        settings = self.window.settings_page
+        self.window.show_settings()
+        release = ui.updater.Release('1.5.4', ui.updater.RELEASES_URL, 'https://github.com/package.zip', 10, 'a'*64)
+        with patch.object(ui.sys, 'frozen', True, create=True), \
+                patch.object(ui.updater, 'check_update', return_value=release), \
+                patch.object(ui.updater, 'prepare_update', side_effect=ui.updater.UpdateError('校验失败')) as download:
+            dialog = ui.UpdateDialog(self.window)
+            dialog.show()
+            self.wait(lambda: dialog.worker is None)
+            download.assert_not_called()
+            self.assertEqual(dialog.accept_button.text(), '更新并重启')
+            dialog.accept_button.click()
+            self.wait(lambda: dialog.worker is None)
+            self.assertIn('校验失败', dialog.label.text())
+            self.assertEqual(dialog.accept_button.text(), '重试更新')
+            dialog.reject()
+            dialog.deleteLater()
+        self.window.show_home()
+
+    def test_download_finishes_before_installer_and_restart(self):
+        settings = self.window.settings_page
+        self.window.show_settings()
+        release = ui.updater.Release('1.5.4', ui.updater.RELEASES_URL, 'https://github.com/package.zip', 10, 'a'*64)
+        prepared = ui.updater.PreparedUpdate(self.root, self.root / 'package', '1.5.4')
+        with patch.object(ui.sys, 'frozen', True, create=True), \
+                patch.object(ui.updater, 'check_update', return_value=release), \
+                patch.object(ui.updater, 'prepare_update', return_value=prepared), \
+                patch.object(ui.updater, 'launch_installer') as install, patch.object(self.app, 'quit') as quit_app:
+            dialog = ui.UpdateDialog(self.window)
+            dialog.show()
+            self.wait(lambda: dialog.worker is None)
+            install.assert_not_called()
+            dialog.accept_button.click()
+            self.wait(lambda: dialog.worker is None)
+            install.assert_called_once_with(prepared)
+            self.app.processEvents()
+            quit_app.assert_called_once()
+            self.assertFalse(dialog.isVisible())
+            dialog.deleteLater()
+        self.window.show_home()
 
     def test_changing_source_or_format_invalidates_previous_plan(self):
         self.scan()
@@ -208,39 +314,68 @@ class InterfaceTests(unittest.TestCase):
             self.wait(lambda: not self.window.busy)
         self.assertFalse(self.window.isVisible())
 
-    def test_settings_dialog_cancel_then_save(self):
-        def cancel_changes():
-            dialog = self.app.activeModalWidget()
-            dialog.duplicate.setChecked(False)
-            dialog.video_time.setChecked(False)
-            QtTest.QTest.keyClick(dialog, QtCore.Qt.Key.Key_Escape)
-        QtCore.QTimer.singleShot(0, cancel_changes)
-        self.window.show_settings()
-        self.assertTrue(self.window.skip_identical)
-        self.assertTrue(self.window.video_time_utc)
-
+    def test_settings_page_saves_immediately_and_returns_without_losing_selection(self):
         self.scan()
-        def save_changes():
-            dialog = self.app.activeModalWidget()
-            dialog.duplicate.setChecked(False)
-            dialog.video_time.setChecked(False)
-            QtTest.QTest.mouseClick(dialog.accept_button, QtCore.Qt.MouseButton.LeftButton)
-        QtCore.QTimer.singleShot(0, save_changes)
+        day = next(iter(self.window.rows))
+        self.window.rows[day].suffix.setText('海边')
+        self.window.rows[day].check.click()
+        selection = self.window.selected.copy()
+        scanned = self.window.scan_result
         self.window.show_settings()
+        page = self.window.settings_page
+        self.assertTrue(page.isVisible())
+        self.assertFalse(page.isWindow())
+        self.assertIsNone(self.app.activeModalWidget())
+        self.assertFalse(self.window.home_page.isVisible())
+        page.duplicate.click()
         self.assertFalse(self.window.skip_identical)
         self.assertFalse(self.settings.value('copy/skip_identical', True, type=bool))
+        page.motion.click()
+        self.assertEqual(self.settings.value('display/reduce_motion', type=bool), page.motion.isChecked())
+        page.back_button.click()
+        self.assertTrue(self.window.home_page.isVisible())
+        self.assertEqual(self.window.selected, selection)
+        self.assertIs(self.window.scan_result, scanned)
+        self.assertEqual(self.window.rows[day].suffix.text(), '海边')
+        self.window.show_settings()
+        page.video_time.click()
         self.assertFalse(self.settings.value('dates/video_time_utc', True, type=bool))
         self.assertIsNone(self.window.scan_result)
+        QtTest.QTest.keyClick(page.back_button, QtCore.Qt.Key.Key_Escape)
+        self.app.processEvents()
+        self.assertTrue(self.window.home_page.isVisible())
+        self.assertEqual(self.window.phase, 'empty')
 
-    def test_photo_selection_includes_heif_and_details_explain_date(self):
+    def test_photo_selection_includes_heif(self):
         self.assertTrue({'.jpg', '.jpeg', '.heic', '.heif', '.hif'} <= self.window.selected_extensions())
         self.window.jpeg_checkbox.setChecked(False)
         self.assertNotIn('.heic', self.window.selected_extensions())
-        self.window.jpeg_checkbox.setChecked(True)
+
+    def test_large_windows_preserve_compact_control_sizes(self):
         self.scan()
-        media = next(file for file in self.window.scan_result.files if file.path.suffix == '.jpg')
-        model = ui.FileTableModel([media], {media.path}, True)
-        self.assertIn('2026', model.data(model.index(0, 3), QtCore.Qt.ItemDataRole.ToolTipRole))
+        self.window.resize(700, 526)
+        self.app.processEvents()
+        row = next(iter(self.window.rows.values()))
+        sizes = (self.window.source_card.height(), self.window.import_button.size(), row.height(),
+                 self.window.title_label.font().pixelSize(), self.window.raw_checkbox.font().pixelSize())
+        list_top = self.window.scroll.y()
+        for width, height in ((1100, 658), (1536, 1024), (2200, 1312)):
+            self.window.resize(width, height)
+            self.app.processEvents()
+            self.assertEqual(sizes, (self.window.source_card.height(), self.window.import_button.size(), row.height(),
+                                    self.window.title_label.font().pixelSize(), self.window.raw_checkbox.font().pixelSize()))
+            self.assertEqual(self.window.source_card.choose_button.text(), '')
+            self.assertEqual(self.window.scroll.y(), list_top)
+        self.window.show_settings()
+        for width, height in ((360, 230), (700, 526), (1536, 1024)):
+            self.window.resize(width, height)
+            self.app.processEvents()
+            page = self.window.settings_page
+            self.assertTrue(self.window.canvas.rect().contains(page.geometry()))
+            self.assertTrue(page.rect().contains(page.back_button.geometry()))
+            page.scroll.verticalScrollBar().setValue(page.scroll.verticalScrollBar().maximum())
+            self.assertLessEqual(page.scroll.mapTo(page, QtCore.QPoint()).y()+page.scroll.height(), page.height())
+        self.window.show_home()
 
     def test_custom_dialog_keyboard_defaults_and_title_drag(self):
         dialog = ui.MessageDialog(self.window, '任务正在进行', '停止当前任务后关闭？', question=True)
@@ -271,16 +406,6 @@ class InterfaceTests(unittest.TestCase):
         self.assertFalse(notice.isVisible())
         notice.deleteLater()
 
-    def test_jpeg_preview_is_loaded_asynchronously(self):
-        self.scan()
-        day = next(day for day, files in self.window.scan_result.groups.items() if any(f.path.suffix == '.jpg' for f in files))
-        dialog = ui.FileDetailsDialog(self.window, day)
-        dialog.show()
-        index = next(i for i, f in enumerate(dialog.model.files) if f.path.suffix == '.jpg')
-        dialog.table.selectRow(index)
-        self.wait(lambda: dialog.preview.pixmap() is not None and not dialog.preview.pixmap().isNull())
-        dialog.close()
-
     def test_settings_preserve_old_format_and_path_keys(self):
         self.window.video_checkbox.setChecked(False)
         self.window.skip_identical = False
@@ -307,7 +432,7 @@ class InterfaceTests(unittest.TestCase):
                 self.assertLess(self.window.target_card.geometry().bottom(), self.window.raw_checkbox.y())
                 self.assertFalse(self.window.scan_button.geometry().intersects(self.window.video_checkbox.geometry()))
                 for row in self.window.rows.values():
-                    for widget in (row.check, row.date_label, row.suffix, row.count, row.detail):
+                    for widget in (row.check, row.date_label, row.suffix, row.count):
                         self.assertTrue(row.rect().contains(widget.geometry()))
                     self.assertLess(row.date_label.geometry().right(), row.suffix.x())
                     self.assertLess(row.suffix.geometry().right(), row.count.x())
@@ -333,10 +458,10 @@ class InterfaceTests(unittest.TestCase):
         self.assertEqual(self.window.source_card.choose_button.text(), '')
         self.window.resize(1536, 1024)
         self.app.processEvents()
-        self.assertEqual(self.window.source_card.choose_button.text(), '选择文件夹')
+        self.assertEqual(self.window.source_card.choose_button.text(), '')
         self.assertEqual(self.window.selected, selected)
         self.assertEqual(row.suffix.text(), '海边')
-        self.assertEqual(row.suffix.styleSheet(), '')
+        self.assertIn('padding:0px', row.suffix.styleSheet())
         self.window.resize(427, 267)
         self.app.processEvents()
         self.assertTrue(row.suffix.isEnabled())
