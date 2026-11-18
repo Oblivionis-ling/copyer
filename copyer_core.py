@@ -13,6 +13,7 @@ from collections.abc import Callable, Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from functools import lru_cache
 from pathlib import Path
 from threading import Event
 
@@ -27,7 +28,10 @@ def check_cancel(cancel: Event) -> None:
 
 
 def is_link(path: Path) -> bool:
-    info = path.lstat()
+    return is_link_info(path.lstat())
+
+
+def is_link_info(info: os.stat_result) -> bool:
     return stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_file_attributes", 0) & 0x400)
 
 
@@ -81,30 +85,28 @@ class MediaFile:
     date_text: str
     size: int
     mtime_ns: int
-    device: int
-    inode: int
     date_source: str = "文件修改时间"
     date_detail: str = ""
 
     @classmethod
-    def inspect(cls, path: Path, reader: MetadataReader | None = None) -> "MediaFile":
-        if is_link(path):
+    def inspect(cls, path: Path, reader: MetadataReader | None = None,
+                info: os.stat_result | None = None) -> "MediaFile":
+        if info is None:
+            info = path.lstat()
+        if is_link_info(info):
             raise ValueError("跳过链接或重解析文件。")
-        info = path.stat()
         if not stat.S_ISREG(info.st_mode):
             raise ValueError("不是普通文件。")
         if reader is None:
             with MetadataReader() as single:
-                captured = single.read(path)
+                captured = single.read(path, info)
         else:
-            captured = reader.read(path)
+            captured = reader.read(path, info)
         day = (captured.value or datetime.fromtimestamp(info.st_mtime)).date().isoformat()
-        return cls(path.resolve(), day, info.st_size, info.st_mtime_ns,
-                   info.st_dev, info.st_ino, captured.source, captured.detail)
+        return cls(path.absolute(), day, info.st_size, info.st_mtime_ns, captured.source, captured.detail)
 
     def matches(self, info: os.stat_result) -> bool:
-        return (info.st_size, info.st_mtime_ns, info.st_dev, info.st_ino) == (
-            self.size, self.mtime_ns, self.device, self.inode)
+        return (info.st_size, info.st_mtime_ns) == (self.size, self.mtime_ns)
 
 
 @dataclass(frozen=True)
@@ -139,16 +141,17 @@ def scan(source_text: str, extensions: Iterable[str], cancel: Event | None = Non
     pending = [source]
     found = 0
     last_update = 0.0
-    reader = MetadataReader(cancel, quicktime_utc=quicktime_utc, cache=metadata_cache)
-    batch: list[Path] = []
+    reader = MetadataReader(cancel, quicktime_utc=quicktime_utc, cache=metadata_cache,
+                            source_identity=result.source_identity)
+    batch: dict[Path, os.stat_result] = {}
 
     def inspect_batch():
         nonlocal found, last_update
-        reader.prefetch(batch)
-        for path in batch:
+        reader.prefetch(list(batch), batch)
+        for path, info in batch.items():
             check_cancel(cancel)
             try:
-                media = MediaFile.inspect(path, reader)
+                media = MediaFile.inspect(path, reader, info)
                 groups[media.date_text].append(media)
                 found += 1
             except (OSError, ValueError) as exc:
@@ -169,12 +172,13 @@ def scan(source_text: str, extensions: Iterable[str], cancel: Event | None = Non
                         check_cancel(cancel)
                         path = Path(entry.path)
                         try:
-                            if is_link(path):
+                            info = entry.stat(follow_symlinks=False)
+                            if is_link_info(info):
                                 result.issues.append(FileIssue(path, "已跳过链接或重解析点。"))
-                            elif entry.is_dir(follow_symlinks=False):
+                            elif stat.S_ISDIR(info.st_mode):
                                 pending.append(path)
-                            elif path.suffix.lower() in allowed and entry.is_file(follow_symlinks=False):
-                                batch.append(path)
+                            elif stat.S_ISREG(info.st_mode) and path.suffix.lower() in allowed:
+                                batch[path] = info
                                 if len(batch) >= 32:
                                     inspect_batch()
                             now = time.monotonic()
@@ -232,12 +236,22 @@ class ImportJob:
 
 
 @dataclass(frozen=True)
+class FileStamp:
+    identity: tuple[int, int]
+    size: int
+    mtime_ns: int
+    change_time: int
+
+
+@dataclass(frozen=True)
 class FileResult:
     item: PlannedFile
     status: str
     destination: Path | None = None
     error: str = ""
     verified_sha256: str = ""
+    source_stamp: FileStamp | None = None
+    target_stamp: FileStamp | None = None
 
 
 @dataclass(frozen=True)
@@ -277,8 +291,9 @@ def build_job(result: ScanResult, target_text: str, selected: set[Path],
 
 
 def _assert_source(media: MediaFile, root: Path) -> None:
-    if (is_link(media.path) or not media.path.resolve().is_relative_to(root)
-            or not media.matches(media.path.stat())):
+    _plain_path(media.path, root)
+    info = media.path.stat()
+    if not stat.S_ISREG(info.st_mode) or not media.matches(info):
         raise ValueError("源文件在扫描后发生变化，请重新扫描。")
 
 
@@ -297,15 +312,14 @@ def _destination_directory(job: ImportJob, folder: str) -> Path:
     return destination
 
 
-def hash_file(path: Path, cancel: Event) -> str:
+def _hash_stream(stream, cancel: Event) -> str:
     digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        while True:
-            check_cancel(cancel)
-            block = stream.read(CHUNK_SIZE)
-            if not block:
-                break
-            digest.update(block)
+    while True:
+        check_cancel(cancel)
+        block = stream.read(CHUNK_SIZE)
+        if not block:
+            break
+        digest.update(block)
     return digest.hexdigest()
 
 
@@ -364,82 +378,91 @@ def run_import(job: ImportJob, cancel: Event | None = None,
                 raise ValueError("来源设备已变化，请重新扫描。")
             _assert_source(media, job.source)
             directory = _destination_directory(job, item.folder)
-            candidate = directory / media.path.name
-            source_digest: str | None = None
-            suffix_index = 0
-            while os.path.lexists(candidate):
-                check_cancel(cancel)
-                if job.skip_identical and not is_link(candidate) and candidate.is_file() and candidate.stat().st_size == media.size:
-                    emit("compare", media.path, force=True)
-                    source_digest = source_digest or hash_file(media.path, cancel)
-                    candidate_before = candidate.stat()
-                    same_content = hash_file(candidate, cancel) == source_digest
-                    candidate_after = candidate.stat()
-                    unchanged = (candidate_before.st_dev, candidate_before.st_ino, candidate_before.st_size, candidate_before.st_mtime_ns) == (candidate_after.st_dev, candidate_after.st_ino, candidate_after.st_size, candidate_after.st_mtime_ns)
-                    if same_content and unchanged:
-                        _assert_source(media, job.source)
-                        result.files.append(FileResult(item, "skipped", candidate, verified_sha256=source_digest))
-                        completed += 1
-                        done += work * 2
-                        emit("compare", media.path, force=True)
-                        break
-                suffix_index += 1
-                candidate = directory / f"{media.path.stem}_{suffix_index}{media.path.suffix}"
-            else:
-                if shutil.disk_usage(directory).free < media.size:
-                    raise ValueError("目标可用空间不足，请更换目标或释放空间。")
-                descriptor, name = tempfile.mkstemp(prefix=".copyer-", suffix=".part", dir=directory)
-                temporary = Path(name)
-                copied = 0
-                source_hash = hashlib.sha256()
-                with os.fdopen(descriptor, "wb") as output, media.path.open("rb") as source:
-                    if not media.matches(os.fstat(source.fileno())):
-                        raise ValueError("源文件已变化，请重新扫描。")
-                    emit("copy", media.path, force=True)
-                    while True:
-                        check_cancel(cancel)
-                        block = source.read(CHUNK_SIZE)
-                        if not block:
-                            break
-                        output.write(block)
-                        source_hash.update(block)
-                        copied += len(block)
-                        emit("copy", media.path, copied)
-                    output.flush()
-                    os.fsync(output.fileno())
-                    if copied != media.size or not media.matches(os.fstat(source.fileno())):
-                        raise ValueError("复制期间源文件发生变化，请重新扫描。")
-                emit("verify", media.path, work, force=True)
-                destination_hash = hashlib.sha256()
-                verified = 0
-                with temporary.open("rb") as copied_file:
-                    while True:
-                        check_cancel(cancel)
-                        block = copied_file.read(CHUNK_SIZE)
-                        if not block:
-                            break
-                        destination_hash.update(block)
-                        verified += len(block)
-                        emit("verify", media.path, work + verified)
-                if verified != media.size or destination_hash.digest() != source_hash.digest():
-                    raise ValueError("目标文件校验失败，未提交正式文件。")
-                _assert_source(media, job.source)
-                shutil.copystat(media.path, temporary, follow_symlinks=False)
-                check_cancel(cancel)
-                if _destination_directory(job, item.folder) != directory:
-                    raise ValueError("目标子文件夹已变化。")
-                while True:
+            with _protected_reader(media.path) as source:
+                source_stamp = _file_stamp(source)
+                if (source_stamp.size, source_stamp.mtime_ns) != (media.size, media.mtime_ns):
+                    raise ValueError("源文件已变化，请重新扫描。")
+                candidate = directory / media.path.name
+                source_digest: str | None = None
+                suffix_index = 0
+                while os.path.lexists(candidate):
                     check_cancel(cancel)
-                    try:
-                        _publish_without_overwrite(temporary, candidate)
-                        temporary = None
-                        break
-                    except FileExistsError:
-                        candidate = ensure_unique_path(directory, media.path.name)
-                result.files.append(FileResult(item, "copied", candidate, verified_sha256=source_hash.hexdigest()))
-                completed += 1
-                done += work * 2
-                emit("verified", media.path, force=True)
+                    if job.skip_identical and not is_link(candidate) and candidate.is_file() and candidate.stat().st_size == media.size:
+                        emit("compare", media.path, force=True)
+                        if source_digest is None:
+                            source_digest = _hash_stream(source, cancel)
+                            source.seek(0)
+                        with _protected_reader(candidate) as target:
+                            target_stamp = _file_stamp(target)
+                            if (_hash_stream(target, cancel) == source_digest
+                                    and _file_stamp(target) == target_stamp
+                                    and identity(candidate) == target_stamp.identity):
+                                _check_import_source(media, job.source, source, source_stamp)
+                                result.files.append(FileResult(item, "skipped", candidate,
+                                    verified_sha256=source_digest, source_stamp=source_stamp, target_stamp=target_stamp))
+                                break
+                    suffix_index += 1
+                    candidate = directory / f"{media.path.stem}_{suffix_index}{media.path.suffix}"
+                else:
+                    if shutil.disk_usage(directory).free < media.size:
+                        raise ValueError("目标可用空间不足，请更换目标或释放空间。")
+                    descriptor, name = tempfile.mkstemp(prefix=".copyer-", suffix=".part", dir=directory)
+                    temporary = Path(name)
+                    copied = 0
+                    source_hash = hashlib.sha256()
+                    with os.fdopen(descriptor, "wb") as output:
+                        emit("copy", media.path, force=True)
+                        while True:
+                            check_cancel(cancel)
+                            block = source.read(CHUNK_SIZE)
+                            if not block:
+                                break
+                            output.write(block)
+                            source_hash.update(block)
+                            copied += len(block)
+                            emit("copy", media.path, copied)
+                        output.flush()
+                        os.fsync(output.fileno())
+                    if copied != media.size:
+                        raise ValueError("复制期间源文件发生变化，请重新扫描。")
+                    emit("verify", media.path, work, force=True)
+                    shutil.copystat(media.path, temporary, follow_symlinks=False)
+                    destination_hash = hashlib.sha256()
+                    verified = 0
+                    with _protected_reader(temporary, allow_rename=True) as target:
+                        before = _file_stamp(target)
+                        while True:
+                            check_cancel(cancel)
+                            block = target.read(CHUNK_SIZE)
+                            if not block:
+                                break
+                            destination_hash.update(block)
+                            verified += len(block)
+                            emit("verify", media.path, work + verified)
+                        if (verified != media.size or destination_hash.digest() != source_hash.digest()
+                                or _file_stamp(target) != before):
+                            raise ValueError("目标文件校验失败，未提交正式文件。")
+                        _check_import_source(media, job.source, source, source_stamp)
+                        if _destination_directory(job, item.folder) != directory:
+                            raise ValueError("目标子文件夹已变化。")
+                        while True:
+                            check_cancel(cancel)
+                            if identity(temporary) != before.identity:
+                                raise ValueError("临时文件已变化，未提交正式文件。")
+                            try:
+                                _publish_without_overwrite(temporary, candidate)
+                                temporary = None
+                                break
+                            except FileExistsError:
+                                candidate = ensure_unique_path(directory, media.path.name)
+                        target_stamp = _file_stamp(target)
+                        if identity(candidate) != target_stamp.identity:
+                            raise ValueError("校验后的目标文件已被替换。")
+                    result.files.append(FileResult(item, "copied", candidate, verified_sha256=source_hash.hexdigest(),
+                                                    source_stamp=source_stamp, target_stamp=target_stamp))
+            completed += 1
+            done += work * 2
+            emit("compare" if result.files[-1].status == "skipped" else "verified", media.path, force=True)
         except Cancelled:
             result.cancelled = True
             result.files.extend(FileResult(rest, "pending", error="已取消") for rest in job.items[index:])
@@ -470,7 +493,8 @@ class CleanupResult:
 
 def cleanup_candidates(files: Iterable[FileResult]) -> tuple[FileResult, ...]:
     return tuple(entry for entry in files if entry.status in {"copied", "skipped"}
-                 and entry.destination is not None and entry.verified_sha256)
+                 and entry.destination is not None and entry.verified_sha256
+                 and entry.source_stamp is not None and entry.target_stamp is not None)
 
 
 def _plain_path(path: Path, root: Path) -> None:
@@ -485,7 +509,7 @@ def _plain_path(path: Path, root: Path) -> None:
 
 
 @contextmanager
-def _protected_reader(path: Path, *, delete_access: bool = False):
+def _protected_reader(path: Path, *, delete_access: bool = False, allow_rename: bool = False):
     """On Windows hold the exact file against writes/renames through deletion."""
     if os.name != "nt":
         with path.open("rb") as stream:
@@ -494,23 +518,62 @@ def _protected_reader(path: Path, *, delete_access: bool = False):
     import ctypes
     import msvcrt
     from ctypes import wintypes
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    create = kernel.CreateFileW
-    create.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
-                       wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
-    create.restype = wintypes.HANDLE
-    handle = create(str(path), 0x80000000 | (0x10000 if delete_access else 0),
-                    1, None, 3, 0x00200000, None)
+    kernel = _windows_file_api()
+    share = 1 | (4 if allow_rename else 0)  # FILE_SHARE_READ | optional FILE_SHARE_DELETE
+    handle = kernel.CreateFileW(str(path), 0x80000000 | (0x10000 if delete_access else 0),
+                                share, None, 3, 0x00200000, None)
     if handle == wintypes.HANDLE(-1).value:
         raise ctypes.WinError(ctypes.get_last_error())
     try:
         descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
     except BaseException:
-        kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
         kernel.CloseHandle(handle)
         raise
     with os.fdopen(descriptor, "rb") as stream:
         yield stream
+
+
+@lru_cache(maxsize=1)
+def _windows_file_api():
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                                   wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+    for function in (kernel.GetFileInformationByHandleEx, kernel.SetFileInformationByHandle):
+        function.argtypes = (wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD)
+        function.restype = wintypes.BOOL
+    return kernel
+
+
+def _file_stamp(stream) -> FileStamp:
+    info = os.fstat(stream.fileno())
+    if not stat.S_ISREG(info.st_mode) or is_link_info(info):
+        raise ValueError("不是普通文件。")
+    change_time = info.st_ctime_ns
+    if os.name == "nt":
+        import ctypes
+        import msvcrt
+
+        # FILE_BASIC_INFO has four 64-bit timestamps followed by file attributes.
+        # Python 3.11's Windows st_ctime is creation time, not change time.
+        basic = (ctypes.c_longlong * 5)()
+        if not _windows_file_api().GetFileInformationByHandleEx(
+                msvcrt.get_osfhandle(stream.fileno()), 0, ctypes.byref(basic), ctypes.sizeof(basic)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if basic[4] & 0x400:
+            raise ValueError("文件路径包含重解析点。")
+        change_time = basic[3]
+    return FileStamp((info.st_dev, info.st_ino), info.st_size, info.st_mtime_ns, change_time)
+
+
+def _check_import_source(media: MediaFile, root: Path, stream, stamp: FileStamp) -> None:
+    _plain_path(media.path, root)
+    if _file_stamp(stream) != stamp or identity(media.path) != stamp.identity:
+        raise ValueError("导入期间源文件发生变化，请重新扫描。")
 
 
 def _delete_open_source(stream, path: Path) -> None:
@@ -521,11 +584,7 @@ def _delete_open_source(stream, path: Path) -> None:
         return
     import ctypes
     import msvcrt
-    from ctypes import wintypes
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    dispose = kernel.SetFileInformationByHandle
-    dispose.argtypes = (wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD)
-    dispose.restype = wintypes.BOOL
+    dispose = _windows_file_api().SetFileInformationByHandle
     # FILE_DISPOSITION_INFO.DeleteFile is a one-byte BOOLEAN.
     flag = ctypes.c_ubyte(1)
     if not dispose(msvcrt.get_osfhandle(stream.fileno()), 4, ctypes.byref(flag), ctypes.sizeof(flag)):
@@ -534,53 +593,40 @@ def _delete_open_source(stream, path: Path) -> None:
 
 def run_cleanup(job: ImportJob, files: Iterable[FileResult], cancel: Event | None = None,
                 progress: Callable[[Progress], None] | None = None) -> CleanupResult:
-    """Delete only receipts from this job after re-reading both protected files."""
+    """Delete files whose current attributes match their verified import receipts."""
     cancel = cancel or Event()
     result = CleanupResult()
     candidates = cleanup_candidates(files)
     allowed_items = set(job.items)
-    total = sum(max(entry.item.media.size, 1) * 2 for entry in candidates)
-    done = 0
+    total = len(candidates)
     started = time.monotonic()
-    for entry in candidates:
+    last_emit = 0.0
+    for processed, entry in enumerate(candidates):
         media, destination = entry.item.media, entry.destination
         try:
             check_cancel(cancel)
+            now = time.monotonic()
+            if progress and now - last_emit >= 0.05:
+                progress(Progress("cleanup", str(media.path), processed, total,
+                                  processed, total, now - started))
+                last_emit = now
+                check_cancel(cancel)
             if entry.item not in allowed_items or identity(job.source) != job.source_identity:
                 raise ValueError("来源设备或任务已变化，已保留来源。")
             validate_roots(job.source, job.target)
             _plain_path(media.path, job.source)
             _plain_path(destination, job.target)
-            _assert_source(media, job.source)
             with _protected_reader(destination) as target, _protected_reader(media.path, delete_access=True) as source:
-                source_info, target_info = os.fstat(source.fileno()), os.fstat(target.fileno())
-                if (not media.matches(source_info) or not stat.S_ISREG(target_info.st_mode)
-                        or target_info.st_size != media.size):
-                    raise ValueError("源文件或目标文件已变化，已保留来源。")
-                if (source_info.st_dev, source_info.st_ino) == (target_info.st_dev, target_info.st_ino):
+                source_stamp, target_stamp = _file_stamp(source), _file_stamp(target)
+                if source_stamp != entry.source_stamp or target_stamp != entry.target_stamp:
+                    raise ValueError("源文件或目标文件与导入时的校验记录不一致，已保留来源。")
+                if source_stamp.identity == target_stamp.identity:
                     raise ValueError("目标与来源是同一文件，已保留来源。")
-                for stream in (source, target):
-                    digest = hashlib.sha256()
-                    read = 0
-                    while True:
-                        check_cancel(cancel)
-                        block = stream.read(CHUNK_SIZE)
-                        if not block:
-                            break
-                        digest.update(block)
-                        read += len(block)
-                        if progress:
-                            progress(Progress("cleanup_verify", str(media.path), done + read, total,
-                                              len(result.deleted), len(candidates), time.monotonic()-started))
-                    if read != media.size or digest.hexdigest() != entry.verified_sha256:
-                        raise ValueError("内容与导入时的校验记录不一致，已保留来源。")
-                    done += max(read, 1)
-                check_cancel(cancel)
                 _plain_path(media.path, job.source)
                 _plain_path(destination, job.target)
-                _assert_source(media, job.source)
-                if identity(destination) != (target_info.st_dev, target_info.st_ino):
-                    raise ValueError("目标文件已被替换，已保留来源。")
+                if identity(media.path) != source_stamp.identity or identity(destination) != target_stamp.identity:
+                    raise ValueError("源文件或目标文件已被替换，已保留来源。")
+                check_cancel(cancel)
                 _delete_open_source(source, media.path)
             result.deleted.append(media.path)
         except Cancelled:
@@ -588,4 +634,7 @@ def run_cleanup(job: ImportJob, files: Iterable[FileResult], cancel: Event | Non
             break
         except (OSError, ValueError) as exc:
             result.issues.append(FileIssue(media.path, str(exc)))
+    if progress and not result.cancelled and total:
+        progress(Progress("cleanup", str(candidates[-1].item.media.path), total, total,
+                          total, total, time.monotonic() - started))
     return result

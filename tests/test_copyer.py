@@ -90,10 +90,10 @@ class CoreTests(unittest.TestCase):
     def test_scan_error_is_reported_and_other_files_survive(self):
         bad, good = self.media('bad.cr3'), self.media('good.cr3')
         original = core.MediaFile.inspect
-        def inspect(path, reader=None):
+        def inspect(path, reader=None, info=None):
             if path == bad:
                 raise PermissionError('denied')
-            return original(path, reader)
+            return original(path, reader, info)
         with patch.object(core.MediaFile, 'inspect', side_effect=inspect):
             result = core.scan(str(self.source), core.RAW_EXTENSIONS)
         self.assertEqual([f.path for f in result.files], [good])

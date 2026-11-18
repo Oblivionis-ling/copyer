@@ -155,8 +155,8 @@ class MetadataIntegrationTests(unittest.TestCase):
             'CanonRaw.crw':'2003-11-10', 'DNG.dng':'2005-08-03', 'Nikon.nef':'2004-06-09',
             'FujiFilm.raf':'2007-05-22', 'Panasonic.rw2':'2008-08-06',
             'Minolta.mrw':'2004-11-18', 'PhaseOne.iiq':'2013-06-19', 'Sigma.x3f':'2001-01-01'}
-        with metadata.MetadataReader() as reader:
-            pid = None
+        with metadata.MetadataReader() as reader, patch.object(
+                reader, 'tags_many', side_effect=AssertionError('Unexpected RAW fallback')):
             for name, day in expected.items():
                 with self.subTest(name=name):
                     path = self.fixture(name)
@@ -166,8 +166,7 @@ class MetadataIntegrationTests(unittest.TestCase):
                     self.assertEqual(result.value.date().isoformat(), day)
                     self.assertNotIn('文件修改', result.source)
                     self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), digest)
-                    pid = pid or reader.process.pid
-                    self.assertEqual(reader.process.pid, pid)
+            self.assertIsNone(reader.process)
 
     def test_cr3_unicode_scan_and_import_use_capture_date_not_mtime(self):
         source = self.root / '存储卡'
@@ -186,7 +185,8 @@ class MetadataIntegrationTests(unittest.TestCase):
             path = self.fixture('QuickTime.heic', '手机'+ext)
             self.write_test_tags(path, '-EXIF:DateTimeOriginal=2026:10:28 00:15:00',
                                  '-EXIF:OffsetTimeOriginal=+08:00')
-        scanned = core.scan(str(self.root), core.PHOTO_EXTENSIONS)
+        with patch.object(metadata.MetadataReader, 'tags_many', side_effect=AssertionError('Unexpected fallback')):
+            scanned = core.scan(str(self.root), core.PHOTO_EXTENSIONS)
         self.assertEqual(len(scanned.files), 3)
         self.assertEqual(list(scanned.groups), ['2026-10-28'])
         self.assertTrue(all('EXIF' in media.date_source for media in scanned.files))
@@ -230,17 +230,17 @@ class MetadataIntegrationTests(unittest.TestCase):
         self.assertEqual(len(scanned.files), len(expected))
         self.assertTrue(all('文件修改时间' in file.date_source for file in scanned.files))
 
-    def test_missing_runtime_is_visible_and_jpeg_keeps_exif_fallback(self):
-        self.fixture('CanonRaw.cr3')
+    def test_missing_runtime_is_visible_and_jpeg_still_reads_native_date(self):
+        self.fixture('QuickTime.mov')
         exif = Image.Exif(); exif[36867] = '2024:01:02 03:04:05'
         Image.new('RGB',(4,4),'white').save(self.root/'photo.jpg', exif=exif)
         with patch.object(metadata, 'runtime_command', side_effect=metadata.MetadataError('读取器缺失')):
-            scanned = core.scan(str(self.root), core.RAW_EXTENSIONS | core.PHOTO_EXTENSIONS)
+            scanned = core.scan(str(self.root), core.VIDEO_EXTENSIONS | core.PHOTO_EXTENSIONS)
         self.assertEqual(len(scanned.issues), 1)
         self.assertIn('读取器缺失', scanned.issues[0].message)
         by_name = {file.path.name:file for file in scanned.files}
         self.assertEqual(by_name['photo.jpg'].date_text, '2024-01-02')
-        self.assertIn('读取失败', by_name['CanonRaw.cr3'].date_source)
+        self.assertIn('读取失败', by_name['QuickTime.mov'].date_source)
 
     def test_absent_and_corrupt_metadata_fall_back_explicitly(self):
         path = self.fixture('QuickTime.heic')
@@ -258,7 +258,11 @@ class MetadataIntegrationTests(unittest.TestCase):
         self.assertEqual(raw.returncode, 0)
         full = {Path(tags['SourceFile']): tags for tags in json.loads(raw.stdout)}
         with metadata.MetadataReader() as reader:
-            reader.prefetch(paths)
+            with patch.object(reader, 'tags_many', wraps=reader.tags_many) as batch:
+                reader.prefetch(paths)
+                batch.assert_called_once()
+                self.assertEqual({path.name for path in batch.call_args.args[0]},
+                                 {'QuickTime.heic', 'QuickTime.mov'})
             for path in paths:
                 with self.subTest(name=path.name):
                     self.assertEqual(reader.read(path), metadata.choose_capture_date(full[path],
@@ -283,7 +287,7 @@ class MetadataIntegrationTests(unittest.TestCase):
         self.assertIn('设备原值', local.files[0].date_detail)
 
     def test_cancelled_batch_reaps_reader(self):
-        paths = [self.fixture('CanonRaw.cr3', f'{index}.cr3') for index in range(32)]
+        paths = [self.fixture('QuickTime.mov', f'{index}.mov') for index in range(32)]
         cancel = Event()
         with metadata.MetadataReader(cancel, command=[sys.executable, '-u', '-c',
                 'import time; time.sleep(60)']) as reader:

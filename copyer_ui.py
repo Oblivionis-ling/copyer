@@ -968,7 +968,7 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
         self.import_button.clicked.connect(self.primary_action)
         self.cleanup_button = QtWidgets.QPushButton("删除已校验的源文件", self.home_page)
         self.cleanup_button.setStyleSheet("padding:0;")
-        self.cleanup_button.setToolTip("删除前重新校验来源和目标；只删除本次已完整导入的源文件")
+        self.cleanup_button.setToolTip("永久删除本次已校验且源文件和目标副本均未变化的源文件，不经过回收站")
         self.cleanup_button.clicked.connect(self.start_cleanup)
         self.cleanup_button.hide()
         self.settings_page = SettingsPage(self)
@@ -1427,11 +1427,14 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
         self.last_progress = progress
         if self._cancel.is_set():
             return
-        self.status_label.setText({"copy": "正在导入", "verify": "正在校验", "compare": "正在比较", "verified": "正在导入", "failed": "正在导入", "cleanup_verify": "删除前校验"}.get(progress.phase, "正在导入"))
+        self.status_label.setText({"verify": "正在校验", "compare": "正在比较", "cleanup": "正在删除源文件"}.get(progress.phase, "正在导入"))
         ratio = min(.999, progress.done / progress.total) if progress.total else 0
         self.progress_bar.setValue(round(ratio*1000))
         self.percent_label.setText(f"{int(ratio*100)}%")
         self.context_label.setText(f"{Path(progress.path).name} · {progress.completed} / {progress.files}")
+        if progress.phase == "cleanup":
+            self.progress_bar.setToolTip(self.context_label.text())
+            return
         if progress.elapsed > 1 and progress.done > 0:
             speed = progress.done / progress.elapsed
             seconds = max(0, round((progress.total-progress.done)/speed))
@@ -1470,25 +1473,10 @@ class MediaImporterWindow(QtWidgets.QMainWindow):
         candidates = core.cleanup_candidates(self.results.values())
         if not candidates:
             return
-        dialog = ThemedDialog(self, "删除已校验的源文件", (530, 360))
-        label = QtWidgets.QLabel(f"将从以下来源永久删除 {len(candidates)} 个已校验文件：\n{self.last_job.source}\n\n"
-                                "删除前会再次逐个核对源文件和目标文件。未导入、校验失败或已变化的文件会保留；文件夹会保留。此操作不经过回收站。")
-        label.setTextFormat(QtCore.Qt.TextFormat.PlainText)
-        label.setWordWrap(True)
-        dialog.content_layout.addWidget(label)
-        listing = QtWidgets.QPlainTextEdit()
-        listing.setReadOnly(True)
-        listing.setPlainText("\n".join(str(entry.item.media.path.relative_to(self.last_job.source)) for entry in candidates))
-        dialog.content_layout.addWidget(listing)
-        dialog.add_actions("删除源文件", "保留", default_accept=False)
-        accepted = dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted
-        dialog.deleteLater()
-        if not accepted:
-            return
         self._phase_before_cleanup = self.phase
         self.phase = "cleaning"
         self.reset_progress()
-        self.status_label.setText("删除前校验")
+        self.status_label.setText("正在删除源文件")
         job = self.last_job
         self._start_worker(lambda cancel, emit: core.run_cleanup(job, candidates, cancel, emit),
                            self.cleanup_finished, self.import_progress)

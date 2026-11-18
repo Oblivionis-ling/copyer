@@ -21,13 +21,13 @@ $env:PYTHONNOUSERSITE = '1'
 .\build_copyer.ps1
 ```
 
-构建脚本使用 `.conda_env\python.exe` 并隔离 DLL 搜索路径。`copyer.spec` 从 `copyer_version.py` 读取版本，生成 `dist/copyer-1.5.3/`。首次构建会下载固定版本的 ExifTool，并校验官方 SHA-256；也可以用 `tools/fetch_exiftool.py --archive 下载好的ZIP` 离线准备。源码仓库不提交环境、第三方二进制、构建输出和便携压缩包。
+构建脚本使用 `.conda_env\python.exe` 并隔离 DLL 搜索路径。`copyer.spec` 从 `copyer_version.py` 读取版本，生成 `dist/copyer-<版本>/`。首次构建会下载固定版本的 ExifTool，并校验官方 SHA-256；也可以用 `tools/fetch_exiftool.py --archive 下载好的ZIP` 离线准备。源码仓库不提交环境、第三方二进制、构建输出和便携压缩包。
 
 ## 本地保持精简
 
 - 保留源码、资源、测试、`.conda_env` 和 `vendor/exiftool`，日常直接从源码运行。
 - `requirements.txt` 使用 Essentials，覆盖界面与 QtTest；不安装完整 PySide6 或 Addons。Ruff、QtAwesome 和 QtPy 按需安装，不作为日常依赖。
-- `dist/Copyer-v1.5.3-Windows-x64.zip` 为当前分发包，与同目录的 SHA256SUMS 一并发布到 GitHub Release；旧的 v1.5.2 正式分发 ZIP 保留。构建脚本只生成本地文件，不自动上传。
+- Windows 便携包与对应的 SHA256SUMS 放在 `dist/`。构建脚本只生成本地文件，正式发布包可从 [GitHub Releases](https://github.com/Oblivionis-ling/copyer/releases) 下载。
 - `build/`、`_work/` 是可重建输出，验证后可清理；界面截图统一写入 `_work/ui/`。分发包完整解压后运行 `Copyer.exe`。
 - `-B` 和构建脚本避免生成 Python 字节码缓存。调试符号 `.pdb` 可移除；保留 Python 标准库、包元数据、Qt 类型提示及第三方许可。
 - ExifTool 保留解析器和运行库，省去独立手册、交互式启动器及地理数据库。历史设计资料保留在 [GitHub 设计档案](https://github.com/Oblivionis-ling/copyer/tree/main/docs/design)。
@@ -39,6 +39,7 @@ $env:PYTHONNOUSERSITE = '1'
 - `copyer_materials.py`：中性方格、控件折射和透明窗框绘制。
 - `copyer_core.py`：扫描、计划、复制、校验和校验后的源文件删除，不依赖界面。
 - `copyer_metadata.py`：RAW / 照片 / 视频日期选择、时区策略与后台读取进程。
+- `copyer_native_dates.py`：按文件结构定位标准 EXIF 及 Canon CRW、Sigma X3F 专有拍摄日期，只读取有界的目录与日期字段。遇到不支持或不明确的字段时，将该文件交给现有批量读取器。
 - `copyer_update.py`：GitHub 正式版查询、下载校验、解压与 Windows 替换/回退助手。
 - `tests/`：文件异常、取消、重试、线程生命周期和界面交互测试。
 - `tools/capture_ui.py` / `tools/capture_states.py`：隔离测试媒体及 Qt 界面截图，不写入正式用户设置。
@@ -52,8 +53,8 @@ v1.5.3 增加完整性删除、更新、批量日期与缓存回归测试；真�
 - 正式更新 ZIP 需命名为 `Copyer-vX.Y.Z-Windows-x64.zip`，内部顶层为 `copyer-X.Y.Z/`，仅包含 `Copyer.exe` 和 `_internal/`。更新器检查 GitHub 上传资产的 SHA-256 digest；缺少资产或 digest 时可打开发布页。
 - 更新仅在用户点击后联网，无后台自动检查。下载和解压在临时目录内完成；当前程序退出后，由独立 PowerShell 助手替换程序与运行库，新程序确认 Qt 窗口已启动后删除旧版本备份。替换或启动失败时回退；失败日志留在提示所示临时目录。
 - `verify_update_installer.py` 在临时目录编译微型测试程序，实际运行同一更新助手，验证替换成功、启动失败回退、部分替换失败回退，以及中文/空格/单引号路径和用户额外文件保留。需要 Windows 自带 .NET Framework C# 编译器。
-- 删除凭据只保存在本次任务内存中；重新扫描或更换目录后清空。确认弹窗列出文件。Windows 删除期间以文件句柄阻止两端写入或重命名，重新读取两端哈希后按同一源文件句柄删除。文件夹、失败项和未选文件不会被批量删除。
-- 扫描只缓存当前会话中最多 20,000 个未变化文件的日期。按路径、设备/文件标识、大小、修改/创建时间及视频时区策略核验；失败读取不缓存，更换来源后清空。该缓存不参与复制或删除的内容校验。
+- 删除凭据只保存在本次任务内存中。导入读取两端文件内容并核对 SHA-256，成功后记录两端文件身份、大小及时间属性。Windows 删除时用文件句柄阻止两端写入或重命名，确认属性仍与记录相同后按源文件句柄删除。此阶段不重新读取文件内容，因此无法发现文件系统未反映在属性上的内容变化。
+- 扫描只缓存当前会话中最多 20,000 个未变化文件的日期，依据来源目录身份、路径、目录枚举可用的属性和视频时区策略。失败读取不缓存，更换来源后清空。该缓存不参与复制或删除的内容校验。
 
 ## 精简包体
 

@@ -112,7 +112,7 @@ class InterfaceTests(unittest.TestCase):
             self.window.import_button.click()
             self.assertEqual(Path(opened.call_args.args[0].toLocalFile()), self.target)
 
-    def test_verified_cleanup_button_confirmation_and_source_invalidation(self):
+    def test_verified_cleanup_button_deletes_directly_and_source_change_hides_it(self):
         self.assertFalse(self.window.cleanup_button.isVisible())
         self.scan()
         self.window.import_button.click()
@@ -125,10 +125,7 @@ class InterfaceTests(unittest.TestCase):
             self.assertTrue(self.window.canvas.rect().contains(self.window.cleanup_button.geometry()))
             self.assertFalse(self.window.cleanup_button.geometry().intersects(self.window.import_button.geometry()))
             self.assertLess(self.window.scroll.geometry().bottom(), self.window.status_label.y())
-        with patch.object(ui.ThemedDialog, 'exec', return_value=QtWidgets.QDialog.DialogCode.Rejected):
-            self.window.cleanup_button.click()
-        self.assertEqual(len(list(self.source.iterdir())), 3)
-        with patch.object(ui.ThemedDialog, 'exec', return_value=QtWidgets.QDialog.DialogCode.Accepted):
+        with patch.object(ui.ThemedDialog, 'exec', side_effect=AssertionError('Unexpected cleanup dialog')):
             self.window.cleanup_button.click()
         self.wait(lambda: not self.window.busy)
         self.assertFalse(self.window.cleanup_button.isVisible())
@@ -143,8 +140,7 @@ class InterfaceTests(unittest.TestCase):
         self.window.import_button.click()
         self.wait(lambda: not self.window.busy)
         (self.source / 'a.cr3').write_bytes(b'changed source')
-        with patch.object(ui.ThemedDialog, 'exec', return_value=QtWidgets.QDialog.DialogCode.Accepted):
-            self.window.cleanup_button.click()
+        self.window.cleanup_button.click()
         self.wait(lambda: not self.window.busy)
         self.assertEqual([path.name for path in self.source.iterdir()], ['a.cr3'])
         self.assertEqual(len(self.window.cleanup_issues), 1)
@@ -154,7 +150,7 @@ class InterfaceTests(unittest.TestCase):
         settings = self.window.settings_page
         self.window.show_settings()
         self.assertEqual(settings.update_button.text(), '检查更新')
-        for response in (None, ui.updater.Release('1.5.4', ui.updater.RELEASES_URL)):
+        for response in (None, ui.updater.Release('1.5.5', ui.updater.RELEASES_URL)):
             with patch.object(ui.updater, 'check_update', return_value=response):
                 dialog = ui.UpdateDialog(self.window)
                 dialog.show()
@@ -188,7 +184,7 @@ class InterfaceTests(unittest.TestCase):
     def test_new_update_requires_click_and_download_failure_can_retry(self):
         settings = self.window.settings_page
         self.window.show_settings()
-        release = ui.updater.Release('1.5.4', ui.updater.RELEASES_URL, 'https://github.com/package.zip', 10, 'a'*64)
+        release = ui.updater.Release('1.5.5', ui.updater.RELEASES_URL, 'https://github.com/package.zip', 10, 'a'*64)
         with patch.object(ui.sys, 'frozen', True, create=True), \
                 patch.object(ui.updater, 'check_update', return_value=release), \
                 patch.object(ui.updater, 'prepare_update', side_effect=ui.updater.UpdateError('校验失败')) as download:
@@ -208,8 +204,8 @@ class InterfaceTests(unittest.TestCase):
     def test_download_finishes_before_installer_and_restart(self):
         settings = self.window.settings_page
         self.window.show_settings()
-        release = ui.updater.Release('1.5.4', ui.updater.RELEASES_URL, 'https://github.com/package.zip', 10, 'a'*64)
-        prepared = ui.updater.PreparedUpdate(self.root, self.root / 'package', '1.5.4')
+        release = ui.updater.Release('1.5.5', ui.updater.RELEASES_URL, 'https://github.com/package.zip', 10, 'a'*64)
+        prepared = ui.updater.PreparedUpdate(self.root, self.root / 'package', '1.5.5')
         with patch.object(ui.sys, 'frozen', True, create=True), \
                 patch.object(ui.updater, 'check_update', return_value=release), \
                 patch.object(ui.updater, 'prepare_update', return_value=prepared), \

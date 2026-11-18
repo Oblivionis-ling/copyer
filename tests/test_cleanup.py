@@ -4,6 +4,7 @@ import os
 import tempfile
 import subprocess
 import unittest
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from threading import Event
@@ -22,8 +23,7 @@ class CleanupTests(unittest.TestCase):
         self.path = self.source / 'photo.cr3'
         self.path.write_bytes(b'camera contents')
         info = self.path.stat()
-        media = core.MediaFile(self.path, '2026-11-04', info.st_size, info.st_mtime_ns,
-                               info.st_dev, info.st_ino)
+        media = core.MediaFile(self.path, '2026-11-04', info.st_size, info.st_mtime_ns)
         self.job = core.ImportJob(self.source, core.identity(self.source), self.target,
                                   (core.PlannedFile(media, media.date_text),))
         self.receipt = core.run_import(self.job).files[0]
@@ -48,9 +48,23 @@ class CleanupTests(unittest.TestCase):
         self.assertEqual(receipt.status, 'skipped')
         self.assertEqual(self.clean(receipt).deleted, [self.path])
 
+    def test_cleanup_uses_file_attributes_without_reading_contents(self):
+        open_file = core._protected_reader
+
+        @contextmanager
+        def attributes_only(path, **kwargs):
+            with open_file(path, **kwargs) as stream:
+                with patch.object(stream, 'read', side_effect=AssertionError('Cleanup read file contents')):
+                    yield stream
+
+        events = []
+        with patch.object(core, '_protected_reader', attributes_only):
+            self.assertEqual(self.clean(progress=events.append).deleted, [self.path])
+        self.assertEqual([(event.done, event.total) for event in events], [(0, 1), (1, 1)])
+
     def test_failed_pending_or_missing_hash_never_allow_deletion(self):
         for receipt in (replace(self.receipt, status='failed'), replace(self.receipt, status='pending'),
-                        replace(self.receipt, verified_sha256='')):
+                        replace(self.receipt, verified_sha256=''), replace(self.receipt, target_stamp=None)):
             self.assertEqual(self.clean(receipt).deleted, [])
             self.assertTrue(self.path.exists())
 
@@ -63,7 +77,9 @@ class CleanupTests(unittest.TestCase):
         self.assertIn('校验记录', result.issues[0].message)
 
     def test_corrupt_or_missing_destination_preserves_source(self):
+        original = self.receipt.destination.stat()
         self.receipt.destination.write_bytes(b'changed content')
+        os.utime(self.receipt.destination, ns=(original.st_atime_ns, original.st_mtime_ns))
         self.assertTrue(self.clean().issues)
         self.assertTrue(self.path.exists())
         self.receipt.destination.unlink()
@@ -86,7 +102,7 @@ class CleanupTests(unittest.TestCase):
         self.assertTrue(self.clean().issues)
         self.assertTrue(self.path.exists())
 
-    def test_cancel_before_or_during_hash_never_deletes_current_file(self):
+    def test_cancel_before_or_at_start_of_cleanup_never_deletes_current_file(self):
         cancel = Event()
         cancel.set()
         self.assertTrue(self.clean(cancel=cancel).cancelled)
@@ -101,9 +117,11 @@ class CleanupTests(unittest.TestCase):
         self.assertTrue(self.path.exists())
 
     @unittest.skipUnless(os.name == 'nt', 'Windows file sharing')
-    def test_windows_locks_prevent_target_changes_during_final_verification(self):
+    def test_windows_locks_prevent_changes_during_deletion(self):
         attempts = []
-        def race(_):
+        delete = core._delete_open_source
+
+        def race(stream, source_path):
             for path in (self.path, self.receipt.destination):
                 try:
                     with path.open('r+b') as stream:
@@ -112,7 +130,10 @@ class CleanupTests(unittest.TestCase):
                     attempts.append(path)
                 else:
                     self.fail('Protected file was writable during deletion')
-        result = self.clean(progress=race)
+            delete(stream, source_path)
+
+        with patch.object(core, '_delete_open_source', side_effect=race):
+            result = self.clean()
         self.assertEqual(result.deleted, [self.path])
         self.assertTrue(attempts)
 

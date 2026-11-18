@@ -1,4 +1,4 @@
-"""Read-only capture dates, using one cancellable ExifTool process per scan."""
+"""Read capture dates directly and batch files that need ExifTool."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -14,6 +14,8 @@ from threading import Event, Thread
 import time
 
 from PIL import Image
+
+from copyer_native_dates import HEIF, JPEG, read_original_date_fields
 
 RAW_FORMATS = {
     "Canon": (".crw", ".cr2", ".cr3"),
@@ -33,8 +35,8 @@ RAW_FORMATS = {
     "通用 DNG（含 DJI / Apple ProRAW）": (".dng",),
 }
 RAW_EXTENSIONS = frozenset(ext for group in RAW_FORMATS.values() for ext in group)
-JPEG_EXTENSIONS = frozenset({".jpg", ".jpeg"})
-PHOTO_EXTENSIONS = JPEG_EXTENSIONS | frozenset({".heic", ".heif", ".hif"})
+JPEG_EXTENSIONS = JPEG
+PHOTO_EXTENSIONS = JPEG_EXTENSIONS | HEIF
 VIDEO_EXTENSIONS = frozenset({".mp4", ".mov", ".m4v"})
 
 
@@ -117,6 +119,24 @@ def choose_capture_date(tags: dict, *, video: bool, quicktime_utc: bool = True) 
                        str(error) if error else "文件未提供有效的拍摄或内容创建日期。")
 
 
+def read_native_date(path: Path) -> CaptureDate | None:
+    fields = read_original_date_fields(path)
+    if fields is None:
+        return None
+    group, original, subsecond, offset = fields
+    if not re.fullmatch(r"[0-9]{4}:[0-9]{2}:[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}", original):
+        return None
+    if ((subsecond and not re.fullmatch(r"[0-9]{1,9}", subsecond))
+            or (offset and not re.fullmatch(r"[+-](?:0[0-9]|1[0-4]):[0-5][0-9]", offset))):
+        return None
+    tags = {f"{group}:DateTimeOriginal": original}
+    if subsecond or offset:
+        fraction = f".{subsecond}" if subsecond else ""
+        tags["Composite:SubSecDateTimeOriginal"] = original + fraction + offset
+    captured = choose_capture_date(tags, video=False)
+    return captured if captured.value is not None else None
+
+
 def read_jpeg_date(path: Path) -> CaptureDate:
     """Fallback when the optional development runtime is unavailable."""
     try:
@@ -145,7 +165,8 @@ def runtime_command() -> list[str]:
 
 class MetadataReader:
     def __init__(self, cancel: Event | None = None, *, timeout: float = 15, quicktime_utc: bool = True,
-                 command: list[str] | None = None, cache: dict | None = None):
+                 command: list[str] | None = None, cache: dict | None = None,
+                 source_identity: tuple[int, int] | None = None):
         self.cancel = cancel or Event()
         self.timeout, self.quicktime_utc = timeout, quicktime_utc
         self.command = command
@@ -156,10 +177,10 @@ class MetadataReader:
         self.fatal_error = ""
         self.prefetched = {}
         self.cache = cache if cache is not None else {}
+        self.source_identity = source_identity
 
-    def cache_key(self, path: Path):
-        info = path.stat()
-        return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns,
+    def cache_key(self, info: os.stat_result):
+        return (self.source_identity, info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns,
                 info.st_ctime_ns, self.quicktime_utc)
 
     def __enter__(self):
@@ -207,7 +228,7 @@ class MetadataReader:
 
     def tags_many(self, paths: list[Path]) -> list[dict]:
         self._start()
-        filenames = [str(path.resolve()) for path in paths]
+        filenames = [str(path.absolute()) for path in paths]
         if any("\n" in filename or "\r" in filename for filename in filenames):
             raise MetadataError("文件名含换行，无法读取元数据。")
         self.sequence += 1
@@ -253,19 +274,21 @@ class MetadataReader:
             self.close()
             raise MetadataError(str(exc)) from exc
 
-    def read(self, path: Path) -> CaptureDate:
+    def read(self, path: Path, info: os.stat_result | None = None) -> CaptureDate:
         self._check_cancel()
         try:
-            key = self.cache_key(path)
+            key = self.cache_key(info if info is not None else path.stat())
         except OSError:
             key = None
         existing = self.cache.get(path)
         if existing is not None and existing[0] == key:
             return existing[1]
         cached = self.prefetched.pop(path, None)
-        if cached is not None:
-            if cached[0] == key:
-                return self.remember(path, key, cached[1])
+        if cached is not None and cached[0] == key:
+            return self.remember(path, key, cached[1])
+        native = read_native_date(path)
+        if native is not None:
+            return self.remember(path, key, native)
         try:
             return self.remember(path, key, self.capture_tags(path, self.tags(path)))
         except MetadataError as exc:
@@ -290,19 +313,24 @@ class MetadataReader:
         return choose_capture_date(tags, video=path.suffix.lower() in VIDEO_EXTENSIONS,
                                    quicktime_utc=self.quicktime_utc)
 
-    def prefetch(self, paths: list[Path]) -> None:
-        """Bounded batch, cached only until the following MediaFile inspections."""
+    def prefetch(self, paths: list[Path], stats: dict[Path, os.stat_result] | None = None) -> None:
+        """Read native dates first, then send only unresolved files to ExifTool."""
         self.prefetched.clear()
         snapshots = {}
         for path in paths:
             self._check_cancel()
             try:
-                key = self.cache_key(path)
-                existing = self.cache.get(path)
-                if existing is None or existing[0] != key:
-                    snapshots[path] = key
+                key = self.cache_key(stats[path] if stats is not None else path.stat())
             except OSError:
                 continue
+            existing = self.cache.get(path)
+            if existing is not None and existing[0] == key:
+                continue
+            native = read_native_date(path)
+            if native is None:
+                snapshots[path] = key
+            else:
+                self.prefetched[path] = (key, native)
         if not snapshots:
             return
         try:
